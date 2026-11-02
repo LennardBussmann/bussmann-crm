@@ -8,8 +8,15 @@ APP_DIR="$(pwd)"
 
 echo "==> Docker installieren"
 if ! command -v docker >/dev/null; then
-  curl -fsSL https://get.docker.com | sh
+  curl -fsSL https://get.docker.com | sh || true
 fi
+if ! docker compose version >/dev/null 2>&1; then
+  echo "==> Docker aus den Ubuntu-Paketquellen installieren"
+  apt-get update
+  apt-get install -y docker.io docker-compose-v2 || apt-get install -y docker.io docker-compose-plugin
+  systemctl enable --now docker
+fi
+docker compose version
 
 echo "==> Firewall (SSH, HTTP, HTTPS)"
 if command -v ufw >/dev/null; then ufw allow OpenSSH; ufw allow 80; ufw allow 443; ufw --force enable; fi
