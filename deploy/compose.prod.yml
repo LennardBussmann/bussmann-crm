@@ -1,0 +1,24 @@
+services:
+  crm:
+    build: ..
+    restart: unless-stopped
+    volumes:
+      - ../data:/data
+    environment:
+      - TZ=Europe/Berlin
+      - APP_URL=https://${DOMAIN}
+      - TRUST_PROXY=1
+      - COOKIE_SECURE=1
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - crm
+volumes:
+  caddy_data:

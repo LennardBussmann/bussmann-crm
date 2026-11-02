@@ -1,0 +1,17 @@
+{
+  "name": "bussmann-crm",
+  "version": "1.0.0",
+  "description": "CRM für Bussmann Land- & Gartentechnik",
+  "main": "server.js",
+  "private": true,
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.js",
+    "test": "node --disable-warning=ExperimentalWarning test/smoke.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "nodemailer": "^6.9.16",
+    "xlsx": "^0.18.5"
+  }
+}

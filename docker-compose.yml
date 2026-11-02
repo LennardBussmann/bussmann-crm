@@ -1,0 +1,13 @@
+services:
+  crm:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data
+    environment:
+      - TZ=Europe/Berlin
+      - APP_URL=https://crm.example.de        # öffentliche Adresse eintragen
+      - TRUST_PROXY=1                          # wenn ein Reverse-Proxy (HTTPS) davor sitzt
+      - COOKIE_SECURE=1
