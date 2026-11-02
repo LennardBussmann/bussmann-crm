@@ -3,6 +3,8 @@
 # Aufruf im Projektordner:  sudo bash deploy/install.sh crm.landtechnik-bussmann.de
 set -euo pipefail
 DOMAIN="${1:?Bitte Domain angeben, z. B.: sudo bash deploy/install.sh crm.landtechnik-bussmann.de}"
+# https:// und / am Ende entfernen
+DOMAIN="${DOMAIN#http://}"; DOMAIN="${DOMAIN#https://}"; DOMAIN="${DOMAIN%%/*}"
 cd "$(dirname "$0")/.."
 APP_DIR="$(pwd)"
 
