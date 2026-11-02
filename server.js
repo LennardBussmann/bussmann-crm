@@ -296,7 +296,8 @@ app.put('/api/customers/:id/info', auth, (req, res) => {
 });
 
 app.delete('/api/customers/:id', auth, admin, (req, res) => {
-  const files = all('SELECT stored_name FROM files WHERE customer_id=?', req.params.id);
+  const files = [...all('SELECT stored_name FROM files WHERE customer_id=?', req.params.id),
+    ...all('SELECT tf.stored_name FROM task_files tf JOIN tasks t ON t.id=tf.task_id WHERE t.customer_id=?', req.params.id)];
   run('DELETE FROM customers WHERE id=?', req.params.id);
   for (const f of files) fs.rm(path.join(DATA_DIR, 'files', f.stored_name), () => {});
   res.json({ ok: true });
@@ -348,7 +349,7 @@ app.post('/api/customers/:id/entries', auth, wrap(async (req, res) => {
     return ids;
   });
   for (const id of taskIds) await L.notifyAssignment(id, req.user.id);
-  res.json({ ok: true });
+  res.json({ ok: true, taskIds });
 }));
 
 app.put('/api/entries/:id', auth, (req, res) => {
@@ -375,6 +376,7 @@ app.delete('/api/entries/:id', auth, (req, res) => {
 
 // ---------- Aufgaben ----------
 const TASK_SQL = `SELECT t.*, a.name assignee, a.color assignee_color, cb.name creator, db.name done_by_name,
+  (SELECT COUNT(*) FROM task_files tf WHERE tf.task_id=t.id) file_count,
   c.first_name c_first, c.last_name c_last, c.company c_company, c.city c_city, c.mobile c_mobile, c.phone c_phone, c.street c_street, c.zip c_zip
   FROM tasks t LEFT JOIN users a ON a.id=t.assigned_to LEFT JOIN users cb ON cb.id=t.created_by LEFT JOIN users db ON db.id=t.done_by LEFT JOIN customers c ON c.id=t.customer_id`;
 
@@ -396,6 +398,7 @@ app.get('/api/tasks/:id', auth, (req, res) => {
   const t = get(`${TASK_SQL} WHERE t.id=?`, req.params.id);
   if (!t) return res.status(404).json({ error: 'Aufgabe nicht gefunden' });
   if (t.entry_id) t.entry = get('SELECT e.*, u.name author FROM entries e LEFT JOIN users u ON u.id=e.created_by WHERE e.id=?', t.entry_id);
+  t.files = all('SELECT f.id, f.filename, f.mime, f.size, f.created_at, f.uploaded_by, u.name uploader FROM task_files f LEFT JOIN users u ON u.id=f.uploaded_by WHERE f.task_id=? ORDER BY f.id', t.id);
   res.json(t);
 });
 app.post('/api/tasks', auth, wrap(async (req, res) => {
@@ -450,7 +453,9 @@ app.delete('/api/tasks/:id', auth, (req, res) => {
   const t = get('SELECT * FROM tasks WHERE id=?', req.params.id);
   if (!t) return res.status(404).json({ error: 'Aufgabe nicht gefunden' });
   if (t.created_by && t.created_by !== req.user.id && t.assigned_to !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Keine Berechtigung' });
+  const tfiles = all('SELECT stored_name FROM task_files WHERE task_id=?', t.id);
   run('DELETE FROM tasks WHERE id=?', t.id);
+  for (const f of tfiles) fs.rm(path.join(DATA_DIR, 'files', f.stored_name), () => {});
   if (t.auto_visit && t.customer_id) {
     // Automatische Besuchsaufgabe gelöscht -> Intervall bleibt, nächste wird neu berechnet
     L.syncVisitTask(t.customer_id);
@@ -587,6 +592,38 @@ app.delete('/api/files/:id', auth, (req, res) => {
   run('DELETE FROM files WHERE id=?', f.id);
   fs.rm(path.join(DATA_DIR, 'files', f.stored_name), () => {});
   L.systemEntry(f.customer_id, req.user.id, `Datei gelöscht: ${f.filename}`);
+  res.json({ ok: true });
+});
+
+// ---------- Bilder & Dateien an Aufgaben ----------
+app.post('/api/tasks/:id/files', auth, express.raw({ type: () => true, limit: '25mb' }), (req, res) => {
+  const t = get('SELECT id FROM tasks WHERE id=?', req.params.id);
+  if (!t) return res.status(404).json({ error: 'Aufgabe nicht gefunden' });
+  if (!req.body || !req.body.length) return bad(res, 'Leere Datei');
+  if (get('SELECT COUNT(*) n FROM task_files WHERE task_id=?', t.id).n >= 30) return bad(res, 'Maximal 30 Dateien pro Aufgabe');
+  const name = U.str(decodeURIComponent(req.get('X-Filename') || 'bild.jpg'), 200).replace(/[\\/\0]/g, '_');
+  const stored = `task${t.id}_${U.token(12)}`;
+  fs.writeFileSync(path.join(DATA_DIR, 'files', stored), req.body);
+  const r = run('INSERT INTO task_files(task_id, filename, stored_name, mime, size, uploaded_by) VALUES(?,?,?,?,?,?)', t.id, name, stored, String(req.get('Content-Type') || 'application/octet-stream').slice(0, 100), req.body.length, req.user.id);
+  run(`UPDATE tasks SET updated_at=datetime('now','localtime') WHERE id=?`, t.id);
+  res.json({ id: Number(r.lastInsertRowid) });
+});
+app.get('/api/task-files/:id', auth, (req, res) => {
+  const f = get('SELECT * FROM task_files WHERE id=?', req.params.id);
+  if (!f) return res.status(404).end();
+  const inline = /^(image\/(png|jpeg|gif|webp)|application\/pdf)$/.test(f.mime || '') && req.query.download !== '1';
+  res.set('Content-Type', inline ? f.mime : 'application/octet-stream');
+  res.set('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(f.filename)}`);
+  res.set('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox");
+  res.set('Cache-Control', 'private, max-age=86400');
+  res.sendFile(path.join(DATA_DIR, 'files', f.stored_name));
+});
+app.delete('/api/task-files/:id', auth, (req, res) => {
+  const f = get('SELECT f.*, t.created_by task_creator, t.assigned_to FROM task_files f JOIN tasks t ON t.id=f.task_id WHERE f.id=?', req.params.id);
+  if (!f) return res.status(404).json({ error: 'Datei nicht gefunden' });
+  if (![f.uploaded_by, f.task_creator, f.assigned_to].includes(req.user.id) && req.user.role !== 'admin') return res.status(403).json({ error: 'Keine Berechtigung' });
+  run('DELETE FROM task_files WHERE id=?', f.id);
+  fs.rm(path.join(DATA_DIR, 'files', f.stored_name), () => {});
   res.json({ ok: true });
 });
 

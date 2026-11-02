@@ -59,6 +59,18 @@ const U = require('../lib/util');
     const notes2 = await call('k', 'GET', '/api/notifications');
     assert.ok(notes2.some((n) => n.text.startsWith('Erinnerung')), 'Erinnerung fehlt');
 
+    // Bild an Aufgabe
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+    const up = await call('k', 'POST', `/api/tasks/${offer.id}/files`, png, true);
+    let td = await call('a', 'GET', `/api/tasks/${offer.id}`);
+    assert.equal(td.files.length, 1);
+    assert.equal((await call('a', 'GET', '/api/tasks?scope=all&status=open')).find((x) => x.id === offer.id).file_count, 1);
+    const img = await fetch(`${base}/api/task-files/${up.id}`, { headers: { Cookie: jars.a } });
+    assert.equal(img.status, 200);
+    await call('a', 'DELETE', `/api/task-files/${up.id}`);
+    td = await call('a', 'GET', `/api/tasks/${offer.id}`);
+    assert.equal(td.files.length, 0);
+
     // Infofeld
     await call('a', 'PUT', `/api/customers/${id}/info`, { info: 'Zahlt immer bar' });
     // Erledigen -> Zeitleiste

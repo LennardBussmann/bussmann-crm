@@ -137,6 +137,45 @@ const userOptions = (selected, { empty } = {}) => (empty ? `<option value="">${e
 const userColor = (id) => state.users.find((u) => u.id === id)?.color || '#6a6d6e';
 const avatar = (name, id, cls = '') => `<span class="avatar ${cls}" style="background:${esc(userColor(id))}" title="${esc(name || '')}">${esc(initials(name))}</span>`;
 
+// ======================= Bilder & Dateien an Aufgaben =======================
+/** Große Fotos (z. B. vom Handy) vor dem Hochladen auf max. 2000 px verkleinern. */
+async function shrinkImage(file) {
+  if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size < 1.5e6 || !window.createImageBitmap) return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas');
+    c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.85));
+    if (!blob || blob.size >= file.size) return file;
+    return new File([blob], file.name.replace(/\.(png|webp|jpe?g)$/i, '') + '.jpg', { type: 'image/jpeg' });
+  } catch { return file; }
+}
+async function uploadTaskFiles(taskId, files) {
+  let n = 0;
+  for (const f of files) {
+    const file = await shrinkImage(f);
+    try {
+      await api(`/tasks/${taskId}/files`, { method: 'POST', raw: true, body: file, headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Filename': encodeURIComponent(file.name) } });
+      n++;
+    } catch (e) { fail(e); }
+  }
+  return n;
+}
+const isImg = (f) => /^image\//.test(f.mime || '');
+const fileInputHtml = (attrs = '') => `<label class="btn sm">${icon('upload')} Bilder / Dateien<input type="file" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx" multiple hidden ${attrs}></label>`;
+function pickedList(input, out) {
+  input.addEventListener('change', () => { out.textContent = input.files.length ? `${input.files.length} Datei${input.files.length > 1 ? 'en' : ''} ausgewählt: ${[...input.files].map((f) => f.name).join(', ')}` : ''; });
+}
+function showImage(f, list) {
+  const imgs = list.filter(isImg); let i = imgs.findIndex((x) => x.id === f.id);
+  const m = modal({ title: esc(f.filename), wide: true, body: `<div style="text-align:center"><img id="lb-img" src="/api/task-files/${f.id}" style="max-width:100%;max-height:75vh;border-radius:6px" alt=""></div>`,
+    foot: `<span class="left">${imgs.length > 1 ? `<button class="btn" id="lb-prev">${icon('left')}</button><button class="btn" id="lb-next">${icon('right')}</button>` : ''}</span><a class="btn" id="lb-dl" href="/api/task-files/${f.id}?download=1">${icon('download')} Herunterladen</a>` });
+  const show = () => { const x = imgs[i]; $('#lb-img', m.el).src = `/api/task-files/${x.id}`; $('.modal-head h2', m.el).textContent = x.filename; $('#lb-dl', m.el).href = `/api/task-files/${x.id}?download=1`; };
+  if (imgs.length > 1) { $('#lb-prev', m.el).onclick = () => { i = (i - 1 + imgs.length) % imgs.length; show(); }; $('#lb-next', m.el).onclick = () => { i = (i + 1) % imgs.length; show(); }; }
+}
+
 // ======================= Zustand & Router =======================
 const state = { me: null, users: [], mailEnabled: false, unread: 0, dashScope: localStorage.getItem('dashScope') || 'mine', dashWeek: null };
 
@@ -297,6 +336,7 @@ function taskItem(t, { showAssignee = true, showCustomer = true } = {}) {
         ${showCustomer && cust ? `<span>${icon('user')} ${esc(cust)}</span>` : ''}
         ${showAssignee && t.assignee ? `<span title="Zuständig">${avatar(t.assignee, t.assigned_to, 'xs')} ${esc(t.assignee)}</span>` : ''}
         ${t.auto_visit ? '<span class="chip">Besuchsintervall</span>' : ''}
+        ${t.file_count ? `<span title="Bilder/Dateien">${icon('link')} ${t.file_count}</span>` : ''}
       </div>
     </div></li>`;
 }
@@ -342,6 +382,10 @@ async function openTask(id, reload) {
     </div>
     ${t.description ? `<div class="section-title" style="margin-top:16px">Beschreibung</div><div class="pre">${esc(t.description)}</div>` : ''}
     ${t.done_note ? `<div class="section-title" style="margin-top:16px">Ergebnis</div><div class="pre">${esc(t.done_note)}</div>` : ''}
+    <div class="section-title" style="margin-top:16px;display:flex;align-items:center;gap:10px">Bilder &amp; Dateien ${t.files.length ? `(${t.files.length})` : ''}<span style="flex:1"></span>${fileInputHtml('id="t-files"')}</div>
+    ${t.files.length ? `<div class="thumbs">${t.files.map((f) => `<div class="thumb" data-fid="${f.id}" title="${esc(f.filename)} · ${esc(f.uploader || '')}">
+        ${isImg(f) ? `<img src="/api/task-files/${f.id}" alt="${esc(f.filename)}" loading="lazy">` : `<div class="doc">${icon('file', 'lg')}<span>${esc(f.filename)}</span></div>`}
+        <button class="del" data-fdel="${f.id}" title="Löschen">${icon('x')}</button></div>`).join('')}</div>` : '<div class="muted small">Noch keine Bilder. Mit dem Handy kannst du direkt ein Foto aufnehmen.</div>'}
     ${t.entry ? `<div class="section-title" style="margin-top:16px">Entstanden aus ${ENTRY_KINDS[t.entry.kind] || 'Eintrag'} vom ${deDateTime(t.entry.happened_at)} (${esc(t.entry.author || '')})</div><div class="callout pre">${esc(t.entry.text)}</div>` : ''}`,
     foot: `<span class="left"><button class="btn danger" id="t-del">${icon('trash')} Löschen</button></span>
       <button class="btn" id="t-edit">${icon('edit')} Bearbeiten</button>
@@ -349,6 +393,22 @@ async function openTask(id, reload) {
     onClose: () => { if (location.hash.startsWith('#/aufgaben/')) history.replaceState(null, '', '#/aufgaben'); },
   });
   const after = () => { m.close(); reload ? reload() : route(); };
+  const refresh = () => { m.close(); openTask(id, reload); };
+  $('#t-files', m.el).onchange = async (e) => {
+    const n = await uploadTaskFiles(id, [...e.target.files]);
+    if (n) toast(`${n} Datei${n > 1 ? 'en' : ''} hinzugefügt`);
+    refresh(); reload && reload();
+  };
+  $$('[data-fid]', m.el).forEach((el) => el.onclick = (e) => {
+    if (e.target.closest('[data-fdel]')) return;
+    const f = t.files.find((x) => x.id === Number(el.dataset.fid));
+    if (isImg(f)) showImage(f, t.files); else window.open(`/api/task-files/${f.id}`, '_blank');
+  });
+  $$('[data-fdel]', m.el).forEach((b) => b.onclick = async (e) => {
+    e.stopPropagation();
+    if (!(await confirmBox('Diese Datei löschen?'))) return;
+    try { await api('/task-files/' + b.dataset.fdel, { method: 'DELETE' }); toast('Gelöscht'); refresh(); } catch (err) { fail(err); }
+  });
   $('#t-del', m.el).onclick = async () => { if (await confirmBox('Diese Aufgabe wirklich löschen?')) { try { await api('/tasks/' + id, { method: 'DELETE' }); toast('Aufgabe gelöscht'); after(); } catch (e) { fail(e); } } };
   $('#t-edit', m.el).onclick = () => { m.close(); openTaskForm(t, reload); };
   if (done) $('#t-reopen', m.el).onclick = async () => { await api(`/tasks/${id}/reopen`, { method: 'POST', body: {} }); toast('Wieder geöffnet'); after(); };
@@ -385,6 +445,7 @@ function taskFields(t = {}, prefix = '') {
     <div class="field"><label>Dauer</label><select name="${prefix}duration_min">${[15, 30, 45, 60, 90, 120, 180, 240, 480].map((n) => `<option value="${n}" ${Number(t.duration_min || 60) === n ? 'selected' : ''}>${n < 60 ? n + ' Min.' : n / 60 + ' Std.'}</option>`).join('')}</select></div>
     <div class="field"><label>Ort / Treffpunkt</label><input type="text" name="${prefix}location" value="${esc(t.location || '')}" placeholder="leer = Kundenadresse"></div>
     <div class="field full"><label>Beschreibung</label><textarea name="${prefix}description" rows="3">${esc(t.description || '')}</textarea></div>
+    ${prefix ? '' : `<div class="field full"><label>Bilder / Dateien</label><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${fileInputHtml('id="tf-files"')}<span class="muted small" id="tf-files-out"></span></div></div>`}
     <div class="field full"><label class="check"><input type="checkbox" name="${prefix}remind_day_before" ${t.remind_day_before === 0 ? '' : 'checked'}> Einen Tag vorher erinnern (in der App${state.mailEnabled ? ', per E-Mail' : ''} und im Kalender-Abo)</label></div>
   </div>`;
 }
@@ -398,13 +459,17 @@ function openTaskForm(t = {}, reload, presetCustomer) {
   });
   const initCust = presetCustomer || (t.customer_id ? { id: t.customer_id, name: taskCust(t) } : null);
   const picker = customerPicker($('#tf-cust', m.el), initCust);
+  pickedList($('#tf-files', m.el), $('#tf-files-out', m.el));
   $('#tf-save', m.el).onclick = async () => {
     const f = $('#tf', m.el);
     if (!f.reportValidity()) return;
     const body = { ...formData(f), customer_id: picker.get() };
     try {
+      let taskId = t.id;
       if (isEdit) await api('/tasks/' + t.id, { method: 'PUT', body });
-      else await api('/tasks', { method: 'POST', body });
+      else taskId = (await api('/tasks', { method: 'POST', body })).id;
+      const files = [...$('#tf-files', m.el).files];
+      if (files.length) { $('#tf-save', m.el).disabled = true; $('#tf-save', m.el).textContent = 'Lädt hoch …'; await uploadTaskFiles(taskId, files); }
       m.close();
       const other = Number(body.assigned_to) !== state.me.id ? ` – ${state.users.find((u) => u.id === Number(body.assigned_to))?.name} wurde benachrichtigt` : '';
       toast((isEdit ? 'Gespeichert' : 'Aufgabe angelegt') + other);
@@ -745,6 +810,7 @@ function followupHtml(i, kind = 'anruf') {
       <label class="check" style="margin-top:22px"><input type="checkbox" data-k="remind_day_before" checked> 1 Tag vorher erinnern</label>
     </div>
     <div class="field" style="margin-top:10px"><label>Notiz zur Aufgabe (optional)</label><input type="text" data-k="description" placeholder="z. B. Angebot für Aufsitzmäher, Budget ca. 5.000 €"></div>
+    <div style="display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap">${fileInputHtml('data-files')}<span class="muted small" data-files-out></span></div>
   </div>`;
 }
 
@@ -773,6 +839,7 @@ function renderTimeline(body, d, reload) {
     $('#tl-fus', body).insertAdjacentHTML('beforeend', followupHtml(fuCount++, k));
     const el = $('#tl-fus', body).lastElementChild;
     $('[data-fu-del]', el).onclick = () => el.remove();
+    pickedList($('[data-files]', el), $('[data-files-out]', el));
     $('[data-k=kind]', el).onchange = (e) => {
       const t = $('[data-k=title]', el);
       const defaults = { anruf: 'Kunde anrufen', termin: 'Termin', besuch: 'Besuch', angebot: 'Angebot erstellen', aufgabe: '' };
@@ -786,13 +853,16 @@ function renderTimeline(body, d, reload) {
     const tasks = $$('.followup', body).map((el) => {
       const o = {}; $$('[data-k]', el).forEach((i) => { o[i.dataset.k] = i.type === 'checkbox' ? i.checked : i.value; }); return o;
     });
+    const fuFiles = $$('.followup', body).map((el) => [...$('[data-files]', el).files]);
     for (const t of tasks) if (!t.due_date) return toast('Bitte für jede Folgeaufgabe ein Datum angeben', true);
     try {
-      await api(`/customers/${c.id}/entries`, { method: 'POST', body: { kind, text, happened_at: $('#tl-when', body).value, tasks } });
+      $('#tl-save', body).disabled = true;
+      const res = await api(`/customers/${c.id}/entries`, { method: 'POST', body: { kind, text, happened_at: $('#tl-when', body).value, tasks } });
+      for (let i = 0; i < (res.taskIds || []).length; i++) if (fuFiles[i]?.length) await uploadTaskFiles(res.taskIds[i], fuFiles[i]);
       const others = tasks.filter((t) => Number(t.assigned_to) !== state.me.id).length;
       toast(`Eintrag gespeichert${tasks.length ? ` · ${tasks.length} Aufgabe${tasks.length > 1 ? 'n' : ''} angelegt` : ''}${others ? ' · Kollegen benachrichtigt' : ''}`);
       reload('zeitleiste');
-    } catch (e) { fail(e); }
+    } catch (e) { fail(e); $('#tl-save', body).disabled = false; }
   };
   const tasksByEntry = {};
   for (const t of d.tasks) if (t.entry_id) (tasksByEntry[t.entry_id] ||= []).push(t);

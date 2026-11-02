@@ -330,3 +330,13 @@ code.url { display: block; padding: 8px 10px; background: var(--surface-2); bord
 @media print { .sidebar, .topbar, .mobile-nav, .btn { display: none !important; } .shell { display: block; } }
 .kv > .chip { justify-self: start; }
 @media (min-width: 861px) { .shell { background: linear-gradient(to right, var(--surface) calc(var(--sidebar) - 1px), var(--line) calc(var(--sidebar) - 1px), var(--line) var(--sidebar), var(--bg) var(--sidebar)); } }
+
+/* Bilder an Aufgaben */
+.thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; margin-top: 8px; }
+.thumb { position: relative; aspect-ratio: 1; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); cursor: zoom-in; background: var(--surface-2); }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb .doc { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 8px; font-size: 12px; text-align: center; word-break: break-all; color: var(--grey-dark); cursor: pointer; }
+.thumb .del { position: absolute; top: 4px; right: 4px; width: 26px; height: 26px; border-radius: 50%; border: 0; background: rgba(0,0,0,.55); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; opacity: .85; }
+.thumb .del .ico { width: 14px; height: 14px; }
+.thumb .del:hover { background: var(--red); opacity: 1; }
+.section-title .btn { text-transform: none; letter-spacing: 0; color: var(--ink); }
