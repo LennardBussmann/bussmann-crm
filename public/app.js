@@ -677,17 +677,27 @@ function openImport(reload) {
       const res = await api('/import/preview', { method: 'POST', raw: true, body: await file.arrayBuffer(), headers: { 'Content-Type': 'application/octet-stream' } });
       rows = res.rows;
       const ok = rows.filter((r) => !r._error);
-      const dups = rows.filter((r) => r._duplicate);
+      const dups = ok.filter((r) => r._duplicate);
+      const mergedRows = ok.filter((r) => r._count > 1);
       const unmapped = res.mapping.filter((x) => !x.field).map((x) => x.column);
+      const errCount = rows.filter((r) => r._error).length;
+      const status = (r) => r._error ? `<span class="chip red">${r._error}</span>`
+        : `${r._duplicate ? `<span class="chip warn" title="Bereits vorhanden: ${esc(r._duplicate_name || '')}">vorhanden</span> ` : ''}${r._count > 1 ? `<span class="chip" title="Doppelte Zeilen in der Datei">${r._count} Zeilen → 1</span>` : ''}${!r._duplicate && r._count === 1 ? '<span class="chip ok">neu</span>' : ''}`;
       $('#imp-preview', m.el).innerHTML = `
-        <div class="callout ${rows.length - ok.length ? 'warn' : 'info'}"><b>${rows.length}</b> Zeilen gelesen, <b>${ok.length}</b> importierbar${rows.length - ok.length ? `, ${rows.length - ok.length} ohne Nachname (werden übersprungen)` : ''}.
-          ${unmapped.length ? `<br>Nicht zugeordnete Spalten (werden ignoriert): ${unmapped.map(esc).join(', ')}` : ''}
-          ${dups.length ? `<br><label class="check" style="margin-top:6px"><input type="checkbox" id="imp-skipdup" checked> ${dups.length} mögliche Dubletten (gleicher Name + PLZ oder gleiche E-Mail) überspringen</label>` : ''}</div>
-        <div class="field" style="margin:12px 0;max-width:320px"><label>Betreuer für importierte Kunden</label><select id="imp-owner">${userOptions(state.me.id)}</select></div>
-        <div class="table-wrap" style="max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:6px"><table class="list"><thead><tr><th></th><th>Vorname</th><th>Nachname</th><th>Firma</th><th>Straße</th><th>PLZ</th><th>Ort</th><th>Art</th><th>Geburtsdatum</th><th>E-Mail</th><th>Handy</th><th>Festnetz</th><th>Intervall</th></tr></thead><tbody>
-        ${rows.slice(0, 300).map((r) => `<tr style="cursor:default"><td>${r._error ? `<span class="chip red">${r._error}</span>` : r._duplicate ? '<span class="chip warn">Dublette?</span>' : '<span class="chip ok">OK</span>'}</td>
-          <td>${esc(r.first_name)}</td><td>${esc(r.last_name)}</td><td>${esc(r.company)}</td><td>${esc(r.street)}</td><td>${esc(r.zip)}</td><td>${esc(r.city)}</td><td>${esc(r.customer_type)}</td><td>${deDate(r.birthday)}</td><td>${esc(r.email)}</td><td>${esc(r.mobile)}</td><td>${esc(r.phone)}</td><td>${INTERVALS[r.visit_interval] && r.visit_interval ? INTERVALS[r.visit_interval] : ''}</td></tr>`).join('')}
-        </tbody></table></div>${rows.length > 300 ? `<p class="muted small">Vorschau zeigt die ersten 300 Zeilen.</p>` : ''}`;
+        <div class="callout ${errCount ? 'warn' : 'info'}"><b>${res.total}</b> Zeilen gelesen → <b>${ok.length}</b> Kunden${mergedRows.length ? `, davon <b>${mergedRows.length}</b> aus doppelten Zeilen zusammengefasst` : ''}.
+          ${errCount ? `<br>${errCount} Zeilen ohne Nachname werden übersprungen.` : ''}
+          ${unmapped.length ? `<br>Nicht zugeordnete Spalten (werden ignoriert): ${unmapped.map(esc).join(', ')}` : ''}</div>
+        ${dups.length ? `<div class="callout" style="margin-top:10px"><b>${dups.length} Kunden gibt es schon im CRM.</b> Was soll mit ihnen passieren?
+          <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
+            <label class="check"><input type="radio" name="imp-dup" value="merge" checked> <span><b>Zusammenführen</b> – fehlende Angaben beim vorhandenen Kunden ergänzen (nichts wird überschrieben, abweichende Telefonnummern/E-Mails landen im Infofeld)</span></label>
+            <label class="check"><input type="radio" name="imp-dup" value="skip"> <span><b>Überspringen</b> – vorhandene Kunden nicht anfassen</span></label>
+            <label class="check"><input type="radio" name="imp-dup" value="create"> <span><b>Trotzdem neu anlegen</b></span></label>
+          </div></div>` : ''}
+        <div class="field" style="margin:12px 0;max-width:320px"><label>Betreuer für neue Kunden</label><select id="imp-owner">${userOptions(state.me.id)}</select></div>
+        <div class="table-wrap" style="max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:6px"><table class="list"><thead><tr><th>Status</th><th>Vorname</th><th>Nachname</th><th>Firma</th><th>Straße</th><th>PLZ</th><th>Ort</th><th>Art</th><th>Geburtsdatum</th><th>E-Mail</th><th>Handy</th><th>Festnetz</th><th>Intervall</th><th>Info</th></tr></thead><tbody>
+        ${rows.slice(0, 300).map((r) => `<tr style="cursor:default"><td class="nowrap">${status(r)}</td>
+          <td>${esc(r.first_name)}</td><td>${esc(r.last_name)}</td><td>${esc(r.company)}</td><td>${esc(r.street)}</td><td>${esc(r.zip)}</td><td>${esc(r.city)}</td><td>${esc(r.customer_type)}</td><td>${deDate(r.birthday)}</td><td>${esc(r.email)}</td><td>${esc(r.mobile)}</td><td>${esc(r.phone)}</td><td>${r.visit_interval ? INTERVALS[r.visit_interval] : ''}</td><td class="small pre">${esc(r.info)}</td></tr>`).join('')}
+        </tbody></table></div>${rows.length > 300 ? `<p class="muted small">Vorschau zeigt die ersten 300 Kunden.</p>` : ''}`;
       $('#imp-go', m.el).disabled = !ok.length;
     } catch (e) { fail(e); }
   };
@@ -697,13 +707,13 @@ function openImport(reload) {
   drop.ondragleave = () => drop.classList.remove('over');
   drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('over'); handle(e.dataTransfer.files[0]); };
   $('#imp-go', m.el).onclick = async () => {
-    const skipDup = $('#imp-skipdup', m.el)?.checked;
+    const dupMode = $('input[name=imp-dup]:checked', m.el)?.value || 'merge';
     const owner = $('#imp-owner', m.el).value;
-    const list = rows.filter((r) => !r._error && !(skipDup && r._duplicate)).map((r) => ({ ...r, owner_id: owner }));
+    const list = rows.filter((r) => !r._error).map((r) => ({ ...r, owner_id: owner }));
     $('#imp-go', m.el).disabled = true;
     try {
-      const res = await api('/import/commit', { method: 'POST', body: { rows: list } });
-      m.close(); toast(`${res.created} Kunden importiert${res.skipped.length ? `, ${res.skipped.length} übersprungen` : ''}`);
+      const res = await api('/import/commit', { method: 'POST', body: { rows: list, dupMode } });
+      m.close(); toast(`${res.created} Kunden neu angelegt${res.updated ? `, ${res.updated} vorhandene ergänzt` : ''}${res.skipped.length ? `, ${res.skipped.length} übersprungen` : ''}`);
       reload && reload();
     } catch (e) { fail(e); $('#imp-go', m.el).disabled = false; }
   };

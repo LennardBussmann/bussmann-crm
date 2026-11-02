@@ -114,6 +114,31 @@ const U = require('../lib/util');
     const imp = await call('a', 'POST', '/api/import/commit', { rows: prev.rows.filter((r) => !r._error && !r._duplicate) });
     assert.equal(imp.created, 2);
 
+    // Doppelte Zeilen zusammenführen + vorhandene ergänzen
+    const wb2 = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb2, XLSX.utils.aoa_to_sheet([
+      ['Vorname', 'Nachname', 'PLZ', 'Ort', 'E-Mail', 'Handynummer', 'Festnetznummer', 'Info'],
+      ['Karl', 'Müller', '48727', 'Billerbeck', '', '0171 555', '', 'Fendt 211'],
+      ['Karl', 'Mueller', '48727', '', 'karl@x.de', '+49 171 555', '02543 9', ''],
+      ['', 'Weber', '', '', 'karl@x.de', '', '', ''],
+      ['Daniel', 'Dircks', '48727', '', 'neu@dircks.de', '', '', 'Hat Hund'],
+    ]), 'K');
+    const prev2 = await call('a', 'POST', '/api/import/preview', XLSX.write(wb2, { type: 'buffer', bookType: 'xlsx' }), true);
+    assert.equal(prev2.total, 4);
+    assert.equal(prev2.rows.length, 3, 'Zeilen falsch zusammengefasst');
+    assert.equal(prev2.rows[0]._count, 2);
+    assert.equal(prev2.rows[1].last_name, 'Weber');
+    assert.equal(prev2.rows[0].city, 'Billerbeck');
+    assert.equal(prev2.rows[0].email, 'karl@x.de');
+    assert.equal(prev2.rows[0].phone, '02543 9');
+    assert.equal(prev2.rows[2]._duplicate, id);
+    const r2 = await call('a', 'POST', '/api/import/commit', { rows: prev2.rows, dupMode: 'merge' });
+    assert.equal(r2.created, 2); assert.equal(r2.updated, 1);
+    const dd = (await call('a', 'GET', `/api/customers/${id}`)).customer;
+    assert.equal(dd.email, 'd@example.de', 'vorhandene E-Mail überschrieben');
+    assert.ok(dd.info.includes('Hat Hund') && dd.info.includes('neu@dircks.de'));
+    assert.equal((await call('a', 'GET', '/api/customers?q=' + encodeURIComponent('Karl Müller'))).rows.length, 1);
+
     // CSV aus Excel (Windows-1252, Semikolon)
     const csv = Buffer.from('Vorname;Nachname;Ort\r\nJ\xfcrgen;M\xfcller;L\xfcnen\r\n', 'latin1');
     const pc = await call('a', 'POST', '/api/import/preview', csv, true);

@@ -546,30 +546,45 @@ app.get('/api/import/template.xlsx', auth, (req, res) => {
 app.post('/api/import/preview', auth, express.raw({ type: () => true, limit: '20mb' }), (req, res) => {
   try {
     const { rows, mapping } = importer.parseWorkbook(req.body);
-    // Dubletten-Hinweis (gleicher Name + PLZ oder gleiche E-Mail)
-    for (const r of rows) {
-      const dup = get(`SELECT id FROM customers WHERE (lower(last_name)=lower(?) AND lower(COALESCE(first_name,''))=lower(COALESCE(?,'')) AND COALESCE(zip,'')=COALESCE(?,'')) OR (? IS NOT NULL AND lower(email)=lower(?)) LIMIT 1`,
-        r.last_name || '', r.first_name, r.zip, r.email, r.email);
-      r._duplicate = dup ? dup.id : null;
-    }
-    res.json({ rows, mapping });
+    const existing = all('SELECT id, first_name, last_name, zip, email, mobile FROM customers');
+    const merged = importer.dedupe(rows, existing);
+    res.json({ rows: merged, mapping, total: rows.length });
   } catch (e) { bad(res, e.message || 'Datei konnte nicht gelesen werden'); }
 });
 app.post('/api/import/commit', auth, (req, res) => {
   const rows = Array.isArray(req.body?.rows) ? req.body.rows.slice(0, 20000) : [];
-  let created = 0; const skipped = [];
+  const dupMode = ['merge', 'skip', 'create'].includes(req.body?.dupMode) ? req.body.dupMode : 'merge';
+  let created = 0; let updated = 0; const skipped = [];
   tx(() => {
     rows.forEach((row, i) => {
+      const dupId = Number(row._duplicate) || null;
+      const old = dupId ? get('SELECT * FROM customers WHERE id=?', dupId) : null;
+      if (old && dupMode === 'skip') { skipped.push({ row: i + 1, error: 'bereits vorhanden' }); return; }
+      if (old && dupMode === 'merge') {
+        const { c: incoming, error } = cleanCustomer({ ...row, owner_id: old.owner_id });
+        if (error) { skipped.push({ row: i + 1, error }); return; }
+        incoming.info = U.str(row.info, 20000) || '';
+        const target = { ...old };
+        const changed = importer.mergeInto(target, incoming);
+        if (!changed.length) return;
+        run(`UPDATE customers SET ${importer.MERGE_FIELDS.map((f) => f + '=?').join(',')}, info=?, updated_by=?, updated_at=datetime('now','localtime') WHERE id=?`,
+          ...importer.MERGE_FIELDS.map((f) => target[f] ?? (f === 'visit_interval' ? '' : null)), target.info || '', req.user.id, old.id);
+        L.systemEntry(old.id, req.user.id, `Per Import ergänzt: ${changed.map((f) => FIELD_LABEL[f] || f).join(', ')}`);
+        if (changed.includes('visit_interval')) L.syncVisitTask(old.id);
+        updated++;
+        return;
+      }
       const { c, error } = cleanCustomer({ ...row, owner_id: row.owner_id || req.user.id });
       if (error) { skipped.push({ row: i + 1, error }); return; }
       const r = run(`INSERT INTO customers(${CUSTOMER_FIELDS.join(',')}, info, created_by, updated_by) VALUES(${CUSTOMER_FIELDS.map(() => '?').join(',')}, ?, ?, ?)`,
         ...CUSTOMER_FIELDS.map((f) => c[f] ?? (f === 'visit_interval' ? '' : null)), U.str(row.info, 20000) || '', req.user.id, req.user.id);
-      L.systemEntry(Number(r.lastInsertRowid), req.user.id, 'Kunde per Excel-Import angelegt');
+      const n = Number(row._count) > 1 ? ` (aus ${Number(row._count)} Zeilen zusammengefasst)` : '';
+      L.systemEntry(Number(r.lastInsertRowid), req.user.id, 'Kunde per Excel-Import angelegt' + n);
       L.syncVisitTask(Number(r.lastInsertRowid));
       created++;
     });
   });
-  res.json({ created, skipped });
+  res.json({ created, updated, skipped });
 });
 
 // ---------- Dateien ----------
