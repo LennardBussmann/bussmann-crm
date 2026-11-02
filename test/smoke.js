@@ -114,6 +114,16 @@ const U = require('../lib/util');
     const imp = await call('a', 'POST', '/api/import/commit', { rows: prev.rows.filter((r) => !r._error && !r._duplicate) });
     assert.equal(imp.created, 2);
 
+    // CSV aus Excel (Windows-1252, Semikolon)
+    const csv = Buffer.from('Vorname;Nachname;Ort\r\nJ\xfcrgen;M\xfcller;L\xfcnen\r\n', 'latin1');
+    const pc = await call('a', 'POST', '/api/import/preview', csv, true);
+    assert.equal(pc.rows[0].first_name, 'Jürgen');
+    assert.equal(pc.rows[0].city, 'Lünen');
+    // Mehrfach löschen
+    const ids = (await call('a', 'GET', '/api/customers?q=schulte')).rows.map((r) => r.id);
+    assert.equal((await call('a', 'POST', '/api/customers/bulk-delete', { ids })).deleted, ids.length);
+    await assert.rejects(call('k', 'POST', '/api/customers/bulk-delete', { ids: [id] }), /403/);
+
     // iCal
     const ical = await call('a', 'GET', '/api/me/ical');
     const feed = await (await fetch(base + new URL(ical.https).pathname)).text();

@@ -580,8 +580,9 @@ async function viewCustomers(main) {
   const load = async () => {
     const qs = new URLSearchParams({ q: st.q, type: st.type, sort: st.sort, owner: st.owner });
     const data = await api('/customers?' + qs);
-    $('#c-table').innerHTML = data.rows.length ? `<table class="list"><thead><tr><th>Name</th><th>Ort</th><th class="hide-m">Kundenart</th><th class="hide-m">E-Mail</th><th>Telefon</th><th class="hide-m">Betreuer</th><th class="hide-m">Letzter Kontakt</th></tr></thead><tbody>
-      ${data.rows.map((c) => `<tr data-id="${c.id}">
+    const adm = state.me.role === 'admin';
+    $('#c-table').innerHTML = data.rows.length ? `${adm ? `<div class="bulkbar hidden" id="c-bulk"><span id="c-bulk-n"></span><button class="btn danger sm" id="c-bulk-del">${icon('trash')} Ausgewählte löschen</button></div>` : ''}<table class="list"><thead><tr>${adm ? '<th style="width:36px"><input type="checkbox" id="c-all" title="Alle auswählen"></th>' : ''}<th>Name</th><th>Ort</th><th class="hide-m">Kundenart</th><th class="hide-m">E-Mail</th><th>Telefon</th><th class="hide-m">Betreuer</th><th class="hide-m">Letzter Kontakt</th></tr></thead><tbody>
+      ${data.rows.map((c) => `<tr data-id="${c.id}">${adm ? `<td onclick="event.stopPropagation()"><input type="checkbox" class="c-sel" value="${c.id}"></td>` : ''}
         <td class="name">${esc(custName(c))}${c.company && c.company !== c.last_name ? `<div class="muted small" style="font-weight:400">${esc(c.company)}</div>` : ''}</td>
         <td>${esc([c.zip, c.city].filter(Boolean).join(' '))}</td>
         <td class="hide-m">${c.customer_type ? `<span class="chip t-${c.customer_type}">${c.customer_type}</span>` : ''}</td>
@@ -593,6 +594,16 @@ async function viewCustomers(main) {
       <div class="list-foot"><span>${data.rows.length}${data.more ? '+' : ''} von ${data.total} Kunden</span><span>Klick auf eine Zeile öffnet den Kunden</span></div>`
       : `<div class="empty">${data.total ? 'Keine Kunden gefunden.' : 'Noch keine Kunden. Legen Sie den ersten Kunden an oder importieren Sie eine Excel-Liste.'}</div>`;
     $$('tr[data-id]').forEach((tr) => tr.onclick = () => { location.hash = '#/kunden/' + tr.dataset.id; });
+    if (adm && data.rows.length) {
+      const upd = () => { const n = $$('.c-sel:checked').length; $('#c-bulk').classList.toggle('hidden', !n); $('#c-bulk-n').textContent = `${n} Kunde${n === 1 ? '' : 'n'} ausgewählt`; };
+      $$('.c-sel').forEach((cb) => cb.onchange = upd);
+      $('#c-all').onchange = (e) => { $$('.c-sel').forEach((cb) => { cb.checked = e.target.checked; }); upd(); };
+      $('#c-bulk-del').onclick = async () => {
+        const ids = $$('.c-sel:checked').map((cb) => Number(cb.value));
+        if (!(await confirmBox(`<b>${ids.length} Kunden</b> mit allen Einträgen, Aufgaben und Dateien endgültig löschen?`))) return;
+        try { const r = await api('/customers/bulk-delete', { method: 'POST', body: { ids } }); toast(`${r.deleted} Kunden gelöscht`); load(); } catch (e) { fail(e); }
+      };
+    }
   };
   $('#c-q').oninput = debounce((e) => { st.q = e.target.value; load(); }, 200);
   $('#c-sort').onchange = (e) => { st.sort = e.target.value; load(); };

@@ -340,3 +340,5 @@ code.url { display: block; padding: 8px 10px; background: var(--surface-2); bord
 .thumb .del .ico { width: 14px; height: 14px; }
 .thumb .del:hover { background: var(--red); opacity: 1; }
 .section-title .btn { text-transform: none; letter-spacing: 0; color: var(--ink); }
+.bulkbar { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: var(--red-50); border-bottom: 1px solid var(--red-100); font-weight: 700; }
+.c-sel, #c-all { width: 17px; height: 17px; accent-color: var(--red); cursor: pointer; }

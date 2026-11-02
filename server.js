@@ -295,12 +295,20 @@ app.put('/api/customers/:id/info', auth, (req, res) => {
   res.json({ ok: true });
 });
 
-app.delete('/api/customers/:id', auth, admin, (req, res) => {
-  const files = [...all('SELECT stored_name FROM files WHERE customer_id=?', req.params.id),
-    ...all('SELECT tf.stored_name FROM task_files tf JOIN tasks t ON t.id=tf.task_id WHERE t.customer_id=?', req.params.id)];
-  run('DELETE FROM customers WHERE id=?', req.params.id);
+function deleteCustomer(id) {
+  const files = [...all('SELECT stored_name FROM files WHERE customer_id=?', id),
+    ...all('SELECT tf.stored_name FROM task_files tf JOIN tasks t ON t.id=tf.task_id WHERE t.customer_id=?', id)];
+  run('DELETE FROM customers WHERE id=?', id);
   for (const f of files) fs.rm(path.join(DATA_DIR, 'files', f.stored_name), () => {});
+}
+app.delete('/api/customers/:id', auth, admin, (req, res) => {
+  deleteCustomer(Number(req.params.id));
   res.json({ ok: true });
+});
+app.post('/api/customers/bulk-delete', auth, admin, (req, res) => {
+  const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter(Number.isInteger).slice(0, 5000);
+  tx(() => ids.forEach(deleteCustomer));
+  res.json({ deleted: ids.length });
 });
 
 // ---------- Zeitleiste ----------
