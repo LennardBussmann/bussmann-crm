@@ -1043,6 +1043,20 @@ async function viewSettings(main) {
         <p class="callout info small" style="margin-bottom:0">Die Adresse ist wie ein Passwort: Wer sie kennt, sieht Ihre Termine. Bei Verlust einfach „Neue Adresse erzeugen“ – die alte wird dann ungültig. Das Abo zeigt Termine aus dem CRM an; Termine, die direkt in Outlook angelegt werden, fließen nicht zurück ins CRM.</p>
       </div></div>
 
+      <div class="card"><div class="card-head"><h2>${icon('home', 'lg')} Symbol auf dem Desktop / Handy</h2></div><div class="card-body">
+        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+          <img src="img/app-192.png" alt="" width="72" height="72" style="border-radius:16px;box-shadow:var(--shadow)">
+          <div style="flex:1;min-width:240px">
+            <button class="btn primary ${installPrompt ? '' : 'hidden'}" id="app-install">${icon('download')} Als App installieren</button>
+            <a class="btn" href="/Bussmann-CRM.url" download>${icon('link')} Desktop-Verknüpfung herunterladen</a>
+          </div>
+        </div>
+        <div class="form-grid" style="margin-top:14px">
+          <div><b>Windows (Edge oder Chrome)</b><ol class="steps"><li>„Als App installieren“ klicken – oder in Edge: Menü <b>…</b> → Apps → <i>Diese Website als App installieren</i>, in Chrome: Menü <b>⋮</b> → Streamen, speichern und teilen → <i>Seite als App installieren</i>.</li><li>Das CRM öffnet sich dann in einem eigenen Fenster mit Bussmann-Symbol auf dem Desktop und in der Taskleiste.</li></ol></div>
+          <div><b>iPhone / iPad</b><ol class="steps"><li>Seite in Safari öffnen.</li><li>Teilen-Symbol (Quadrat mit Pfeil) → <i>Zum Home-Bildschirm</i>.</li></ol><b>Android</b><ol class="steps"><li>In Chrome Menü ⋮ → <i>App installieren</i>.</li></ol></div>
+        </div>
+      </div></div>
+
       <div class="card"><div class="card-head"><h2>${icon('user', 'lg')} Mein Profil</h2></div><div class="card-body">
         <form id="me-form" class="form-grid">
           <div class="field"><label>Name</label><input type="text" name="name" value="${esc(state.me.name)}"></div>
@@ -1063,6 +1077,7 @@ async function viewSettings(main) {
       <div class="card"><div class="card-head"><h2>${icon('mail', 'lg')} E-Mail-Versand (SMTP)</h2><span class="chip ${state.mailEnabled ? 'ok' : 'warn'}">${state.mailEnabled ? 'aktiv' : 'nicht eingerichtet'}</span></div><div class="card-body" id="smtp-body">Lädt …</div></div>` : ''}
     </div>`;
 
+  $('#app-install').onclick = async () => { if (!installPrompt) return; installPrompt.prompt(); const r = await installPrompt.userChoice; if (r.outcome === 'accepted') toast('Bussmann CRM wurde installiert'); installPrompt = null; $('#app-install').classList.add('hidden'); };
   $('#ical-copy').onclick = async () => { try { await navigator.clipboard.writeText(ical.https); toast('Adresse kopiert'); } catch { toast('Bitte manuell markieren und kopieren', true); } };
   $('#ical-reset').onclick = async () => { if (await confirmBox('Neue Abo-Adresse erzeugen? Bestehende Abos in Outlook/iPhone funktionieren dann nicht mehr und müssen neu eingerichtet werden.', 'Neu erzeugen')) { await api('/me/ical/reset', { method: 'POST', body: {} }); viewSettings(main); } };
   $('#me-form').onsubmit = async (e) => {
@@ -1118,5 +1133,10 @@ function openUserForm(u) {
     } catch (e) { fail(e); }
   };
 }
+
+// App-Installation (Desktop-Symbol) vorbereiten
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; const b = $('#app-install'); if (b) b.classList.remove('hidden'); });
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 boot();

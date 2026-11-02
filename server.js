@@ -646,9 +646,17 @@ app.get('/ical/:token.ics', (req, res) => {
 });
 
 // ---------- Frontend ----------
+app.get('/favicon.ico', (req, res) => res.set('Cache-Control', 'public, max-age=86400').sendFile(path.join(__dirname, 'public', 'img', 'favicon.ico')));
+// Desktop-Verknüpfung für Windows (.url-Datei mit Bussmann-Symbol)
+app.get('/Bussmann-CRM.url', (req, res) => {
+  const base = appUrl() || `${req.protocol}://${req.get('host')}`;
+  res.set('Content-Type', 'application/octet-stream');
+  res.set('Content-Disposition', 'attachment; filename="Bussmann CRM.url"');
+  res.send(`[InternetShortcut]\r\nURL=${base}/\r\nIconFile=${base}/favicon.ico\r\nIconIndex=0\r\n`);
+});
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 // HTML/JS/CSS immer neu prüfen (ETag), damit Updates sofort ankommen
-app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', setHeaders: (res, p) => res.set('Cache-Control', /\.(png|webmanifest)$/.test(p) ? 'public, max-age=86400' : 'no-cache') }));
+app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', setHeaders: (res, p) => res.set('Cache-Control', /\.(png|ico)$/.test(p) ? 'public, max-age=86400' : 'no-cache') }));
 app.use('/api', (req, res) => res.status(404).json({ error: 'Nicht gefunden' }));
 app.use((err, req, res, next) => {
   console.error(err);
