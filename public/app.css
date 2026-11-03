@@ -418,3 +418,10 @@ button.chip.tagchip { border: 1px dashed var(--line-strong); cursor: pointer; fo
 
 .update-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 3000; background: var(--ink); color: #fff; padding: 10px 12px 10px 16px; border-radius: 10px; box-shadow: var(--shadow-lg); display: flex; gap: 10px; align-items: center; font-size: 14px; max-width: calc(100% - 24px); }
 @media (max-width: 860px) { .update-bar { bottom: 80px; } }
+
+/* Abwesenheiten */
+.ev.absence { border-left-color: #8a8d8f; background: repeating-linear-gradient(135deg, #f1f1f0, #f1f1f0 6px, #e7e8e8 6px, #e7e8e8 12px); color: var(--grey-dark); font-weight: 700; }
+.ev.absence.k-abs-urlaub { border-left-color: #1f8fbf; background: repeating-linear-gradient(135deg, #e6f3fa, #e6f3fa 6px, #d8ecf6 6px, #d8ecf6 12px); }
+.ev.absence.k-abs-krank { border-left-color: #b26a00; background: repeating-linear-gradient(135deg, #fff4e0, #fff4e0 6px, #fbead0 6px, #fbead0 12px); }
+.month .cell.away { background: repeating-linear-gradient(135deg, #fafafa, #fafafa 8px, #f2f3f3 8px, #f2f3f3 16px); }
+.callout.warn { background: var(--warn-50); color: var(--warn); border-color: #f0d199; }

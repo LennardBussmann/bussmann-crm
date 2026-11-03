@@ -34,6 +34,66 @@ const fmtSize = (b) => (b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.ma
 const TYPES = ['Landwirt', 'Gartenbau', 'Forst', 'Kommune', 'Gewerbe', 'Privat'];
 const INTERVALS = { '': 'Kein Intervall', monthly: 'Monatlich', quarterly: 'Vierteljährlich', halfyearly: 'Halbjährlich', yearly: 'Jährlich' };
 const TASK_KINDS = { anruf: 'Anruf', termin: 'Termin', besuch: 'Besuch', angebot: 'Angebot', wartung: 'Wartung', aufgabe: 'Aufgabe' };
+const ABSENCE_KINDS = { urlaub: ['Urlaub', '🏖'], privat: ['Privat / geblockt', '🔒'], krank: ['Krank', '🤒'], schulung: ['Schulung / Messe', '🎓'], sonstiges: ['Abwesend', '⛔'] };
+const absOn = (list, day) => (list || []).filter((a) => a.start_date <= day && a.end_date >= day);
+function absHtml(a, showWho = true) {
+  const [label, emo] = ABSENCE_KINDS[a.kind] || ['Abwesend', '⛔'];
+  const mine = a.user_id === state.me.id;
+  return `<div class="ev absence k-abs-${a.kind}" data-abs="${a.id}" title="${esc((showWho || !mine ? a.user_name + ': ' : '') + label + (a.note ? ' – ' + a.note : ''))}">
+    <div class="ttl">${emo} ${showWho || !mine ? esc(a.user_name.split(' ')[0]) + ' · ' : ''}${label}</div>${a.start_time ? `<div class="t">${a.start_time}–${a.end_time}</div>` : ''}</div>`;
+}
+function openAbsenceForm(a = {}, reload) {
+  const isEdit = !!a.id;
+  const canEdit = !isEdit || a.user_id === state.me.id || state.me.role === 'admin';
+  const adm = state.me.role === 'admin';
+  const m = modal({
+    title: isEdit ? (canEdit ? 'Abwesenheit bearbeiten' : 'Abwesenheit') : 'Abwesenheit eintragen',
+    body: !canEdit ? `<div class="kv"><span class="k">Mitarbeiter</span><span>${esc(a.user_name)}</span><span class="k">Art</span><span>${ABSENCE_KINDS[a.kind]?.[1] || ''} ${esc(ABSENCE_KINDS[a.kind]?.[0] || '')}</span>
+        <span class="k">Zeitraum</span><span>${deDate(a.start_date)}${a.end_date !== a.start_date ? ' – ' + deDate(a.end_date) : ''}${a.start_time ? `, ${a.start_time}–${a.end_time} Uhr` : ''}</span></div>`
+      : `<form id="af"><div class="form-grid">
+      ${adm ? `<div class="field"><label>Mitarbeiter</label><select name="user_id">${userOptions(a.user_id || state.me.id)}</select></div>` : ''}
+      <div class="field ${adm ? '' : 'full'}"><label>Art</label><div class="seg" id="af-kind">${Object.entries(ABSENCE_KINDS).map(([k, [l, e]]) => `<button type="button" data-k="${k}" class="${(a.kind || 'urlaub') === k ? 'on' : ''}">${e} ${l}</button>`).join('')}</div></div>
+      <div class="field"><label>Von <span class="req">*</span></label><input type="date" name="start_date" value="${esc(a.start_date || todayISO())}" required></div>
+      <div class="field"><label>Bis</label><input type="date" name="end_date" value="${esc(a.end_date || a.start_date || todayISO())}"></div>
+      <div class="field full"><label class="check"><input type="checkbox" id="af-part" ${a.start_time ? 'checked' : ''}> Nur ein paar Stunden (z. B. Arzttermin)</label></div>
+      <div class="field af-time"><label>Von Uhrzeit</label><input type="time" name="start_time" value="${esc(a.start_time || '08:00')}"></div>
+      <div class="field af-time"><label>Bis Uhrzeit</label><input type="time" name="end_time" value="${esc(a.end_time || '12:00')}"></div>
+      <div class="field full"><label>Notiz <span class="muted">(sehen nur Sie${adm ? '' : ' und der Administrator'})</span></label><input type="text" name="note" value="${esc(a.note || '')}" placeholder="z. B. Familienurlaub, Zahnarzt …"></div>
+      <div class="full callout info small">${icon('info')} Kollegen sehen im Kalender nur <b>wer</b> und <b>was</b> (z. B. „Urlaub“), keine Notiz. Wer an diesem Tag einen Termin für Sie plant, bekommt einen Hinweis.</div>
+    </div></form>`,
+    foot: canEdit ? `<span class="left">${isEdit ? `<button class="btn danger" id="af-del">${icon('trash')} Löschen</button>` : ''}</span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="af-save">Speichern</button>` : '<span class="left"></span><button class="btn" data-close>Schließen</button>',
+  });
+  if (!canEdit) return;
+  let kind = a.kind || 'urlaub';
+  $$('#af-kind button', m.el).forEach((b) => b.onclick = () => { kind = b.dataset.k; $$('#af-kind button', m.el).forEach((x) => x.classList.toggle('on', x === b)); });
+  const part = $('#af-part', m.el); const start = $('[name=start_date]', m.el); const end = $('[name=end_date]', m.el);
+  const syncPart = () => { $$('.af-time', m.el).forEach((el) => el.classList.toggle('hidden', !part.checked)); if (part.checked) end.value = start.value; end.disabled = part.checked; };
+  part.onchange = syncPart; syncPart();
+  start.onchange = () => { if (!end.value || end.value < start.value || part.checked) end.value = start.value; };
+  $('#af-save', m.el).onclick = async () => {
+    const body = { ...formData($('#af', m.el)), kind, end_date: end.value };
+    if (!part.checked) { body.start_time = ''; body.end_time = ''; }
+    try {
+      if (isEdit) await api('/absences/' + a.id, { method: 'PUT', body }); else await api('/absences', { method: 'POST', body });
+      m.close(); toast('Abwesenheit gespeichert'); reload && reload();
+    } catch (e) { fail(e); }
+  };
+  if (isEdit) $('#af-del', m.el).onclick = async () => {
+    if (!(await confirmBox('Diese Abwesenheit löschen?'))) return;
+    try { await api('/absences/' + a.id, { method: 'DELETE' }); m.close(); toast('Gelöscht'); reload && reload(); } catch (e) { fail(e); }
+  };
+}
+/** Hinweis im Terminformular, wenn Zuständiger/Teilnehmer an dem Tag abwesend ist */
+function bindAbsenceWarning(root, getUsers, dateEl, timeEl, out) {
+  const check = debounce(async () => {
+    const ids = getUsers(); const date = dateEl.value;
+    if (!date || !ids.length) { out.innerHTML = ''; return; }
+    const hits = await api(`/absences/check?date=${date}&time=${timeEl?.value || ''}&users=${ids.join(',')}`).catch(() => []);
+    out.innerHTML = hits.length ? `<div class="callout warn small">${icon('info')} ${hits.map((h) => `<b>${esc(h.user_id === state.me.id ? 'Sie sind' : h.user_name + ' ist')}</b> an diesem Tag abwesend (${esc(h.label)}${h.start_time ? `, ${h.start_time}–${h.end_time} Uhr` : ''})`).join('<br>')}. Termin trotzdem speichern?</div>` : '';
+  }, 250);
+  root.addEventListener('change', check); root.addEventListener('click', (e) => { if (e.target.closest('[data-parts]')) check(); });
+  check();
+}
 const MACHINE_CATS = ['Traktor', 'Rasentraktor', 'Aufsitzmäher', 'Rasenmäher', 'Mähroboter', 'Motorsäge', 'Freischneider', 'Heckenschere', 'Laubbläser', 'Kehrmaschine', 'Kommunaltraktor', 'Mähwerk', 'Mulcher', 'Anhänger', 'Holzspalter', 'Sonstiges'];
 const tagList = (s) => String(s || '').split('|').filter(Boolean);
 const tagChips = (s, cls = '') => tagList(s).map((t) => `<span class="chip tagchip ${cls}">${icon('tag')} ${esc(t)}</span>`).join(' ');
@@ -499,6 +559,7 @@ function taskFields(t = {}, prefix = '') {
     <div class="field"><label>Dauer</label><select name="${prefix}duration_min">${[15, 30, 45, 60, 90, 120, 180, 240, 480].map((n) => `<option value="${n}" ${Number(t.duration_min || 60) === n ? 'selected' : ''}>${n < 60 ? n + ' Min.' : n / 60 + ' Std.'}</option>`).join('')}</select></div>
     <div class="field"><label>Ort / Treffpunkt</label><input type="text" name="${prefix}location" value="${esc(t.location || '')}" placeholder="leer = Kundenadresse"></div>
     <div class="field full"><label>Weitere Teilnehmer <span class="muted">(werden eingeladen, bekommen eine E-Mail und sehen den Termin in ihrem Kalender)</span></label>${participantsHtml(partIds(t))}</div>
+    ${prefix ? '' : '<div class="full" id="tf-abs"></div>'}
     <div class="field full"><label>Beschreibung</label><textarea name="${prefix}description" rows="3">${esc(t.description || '')}</textarea></div>
     ${prefix ? '' : `<div class="field full"><label>Bilder / Dateien</label><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${fileInputHtml('id="tf-files"')}<span class="muted small" id="tf-files-out"></span></div></div>`}
     <div class="field full"><label class="check"><input type="checkbox" name="${prefix}remind_day_before" ${t.remind_day_before === 0 ? '' : 'checked'}> Einen Tag vorher erinnern (in der App${state.mailEnabled ? ', per E-Mail' : ''} und im Kalender-Abo)</label></div>
@@ -516,6 +577,7 @@ function openTaskForm(t = {}, reload, presetCustomer) {
   const picker = customerPicker($('#tf-cust', m.el), initCust);
   pickedList($('#tf-files', m.el), $('#tf-files-out', m.el));
   bindParticipants(m.el, $('[name=assigned_to]', m.el));
+  bindAbsenceWarning(m.el, () => [Number($('[name=assigned_to]', m.el).value), ...readParticipants(m.el)], $('[name=due_date]', m.el), $('[name=due_time]', m.el), $('#tf-abs', m.el));
   $('#tf-save', m.el).onclick = async () => {
     const f = $('#tf', m.el);
     if (!f.reportValidity()) return;
@@ -570,6 +632,7 @@ async function viewDashboard(main) {
               <div class="day-head"><div class="dn">${WD[dt.getDay()]}</div><div class="dd">${dt.getDate()}.${dt.getMonth() + 1}.</div></div>
               <div class="day-body" data-day="${day}">
                 ${bd.map((b) => `<div class="ev bday" data-cust="${b.id}"><div class="ttl">🎂 ${esc(custName(b))}</div><div class="who">${b.age}. Geburtstag</div></div>`).join('')}
+                ${absOn(d.absences, day).map((a) => absHtml(a, state.dashScope !== 'mine')).join('')}
                 ${items.map((t) => evHtml(t, state.dashScope !== 'mine')).join('')}
               </div></div>`;
           }).join('')}</div>
@@ -598,6 +661,7 @@ async function viewDashboard(main) {
     $$('[data-jump]').forEach((el) => el.onclick = () => $('#open-card').scrollIntoView({ behavior: 'smooth' }));
     $$('[data-cust]', main).forEach((el) => el.onclick = () => { location.hash = '#/kunden/' + el.dataset.cust; });
     $$('.ev[data-ev]', main).forEach((el) => el.onclick = () => openTask(Number(el.dataset.ev), load));
+    $$('.ev[data-abs]', main).forEach((el) => el.onclick = () => openAbsenceForm(d.absences.find((a) => a.id === Number(el.dataset.abs)), load));
     $$('.day-body', main).forEach((el) => el.addEventListener('dblclick', (e) => { if (e.target === el) openTaskForm({ due_date: el.dataset.day, kind: 'termin' }, load); }));
     bindTaskList($('.side', main), load);
   };
@@ -978,7 +1042,7 @@ function followupHtml(i, kind = 'anruf') {
       <div class="field"><label>Zuständig</label><select data-k="assigned_to">${userOptions(state.me.id)}</select></div>
       <label class="check" style="margin-top:22px"><input type="checkbox" data-k="remind_day_before" checked> 1 Tag vorher erinnern</label>
     </div>
-    <div class="field" style="margin-top:10px"><label>Weitere Teilnehmer (optional)</label>${participantsHtml([])}</div>
+    <div class="field" style="margin-top:10px"><label>Weitere Teilnehmer (optional)</label>${participantsHtml([])}</div><div data-abs-out style="margin-top:8px"></div>
     <div class="field" style="margin-top:10px"><label>Notiz zur Aufgabe (optional)</label><input type="text" data-k="description" placeholder="z. B. Angebot für Aufsitzmäher, Budget ca. 5.000 €"></div>
     <div style="display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap">${fileInputHtml('data-files')}<span class="muted small" data-files-out></span></div>
   </div>`;
@@ -1011,6 +1075,7 @@ function renderTimeline(body, d, reload) {
     $('[data-fu-del]', el).onclick = () => el.remove();
     pickedList($('[data-files]', el), $('[data-files-out]', el));
     bindParticipants(el, $('[data-k=assigned_to]', el));
+    bindAbsenceWarning(el, () => [Number($('[data-k=assigned_to]', el).value), ...readParticipants(el)], $('[data-k=due_date]', el), $('[data-k=due_time]', el), $('[data-abs-out]', el));
     $('[data-k=kind]', el).onchange = (e) => {
       const t = $('[data-k=title]', el);
       const defaults = { anruf: 'Kunde anrufen', termin: 'Termin', besuch: 'Besuch', angebot: 'Angebot erstellen', aufgabe: '' };
@@ -1346,15 +1411,18 @@ async function viewCalendar(main) {
       <div class="page-head"><h1>${MONTHS[mo - 1]} ${y}</h1>
         <select id="cal-scope" style="width:auto"><option value="mine">Mein Kalender</option><option value="all">Alle Mitarbeiter</option>${state.users.filter((u) => u.active && u.id !== state.me.id).map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
         <div class="btn-group"><button class="btn" id="m-prev">${icon('left')}</button><button class="btn" id="m-today">Heute</button><button class="btn" id="m-next">${icon('right')}</button></div>
+        <button class="btn" id="cal-abs">🏖 Abwesenheit</button>
         <button class="btn primary" id="cal-new">${icon('plus')} Termin</button></div>
-      <p class="muted small" style="margin-top:-8px">Tipp: Auf einen Tag klicken, um dort einen Termin anzulegen. Abo für Outlook &amp; iPhone unter <a href="#/einstellungen">Einstellungen</a>.</p>
+      <p class="muted small" style="margin-top:-8px">Tipp: Auf einen Tag klicken, um dort einen Termin anzulegen. Urlaub oder private Termine über „Abwesenheit“ blocken. Abo für Outlook &amp; iPhone unter <a href="#/einstellungen">Einstellungen</a>.</p>
       <div class="card"><div class="month">
         ${['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'].map((w) => `<div class="dow">${w}</div>`).join('')}
         ${days.map((day) => {
           const items = data.tasks.filter((t) => t.due_date === day);
           const bd = data.birthdays.filter((b) => b.date === day);
-          const all = [...bd.map((b) => `<div class="ev bday" data-cust="${b.id}"><div class="ttl">🎂 ${esc(custName(b))}</div></div>`), ...items.map((t) => evHtml(t, showWho))];
-          return `<div class="cell ${day.slice(0, 7) !== st.month ? 'other' : ''} ${day === todayISO() ? 'today' : ''}" data-day="${day}"><span class="num">${parseISO(day).getDate()}</span>${all.slice(0, 4).join('')}${all.length > 4 ? `<span class="more">+${all.length - 4} weitere</span>` : ''}</div>`;
+          const abs = absOn(data.absences, day);
+          const all = [...abs.map((a) => absHtml(a, showWho)), ...bd.map((b) => `<div class="ev bday" data-cust="${b.id}"><div class="ttl">🎂 ${esc(custName(b))}</div></div>`), ...items.map((t) => evHtml(t, showWho))];
+          const meAway = abs.some((a) => a.user_id === state.me.id && !a.start_time);
+          return `<div class="cell ${day.slice(0, 7) !== st.month ? 'other' : ''} ${day === todayISO() ? 'today' : ''} ${meAway && !showWho ? 'away' : ''}" data-day="${day}"><span class="num">${parseISO(day).getDate()}</span>${all.slice(0, 4).join('')}${all.length > 4 ? `<span class="more">+${all.length - 4} weitere</span>` : ''}</div>`;
         }).join('')}
       </div></div>`;
     $('#cal-scope').value = st.scope;
@@ -1366,13 +1434,16 @@ async function viewCalendar(main) {
     $('#cal-new').onclick = () => openTaskForm({ kind: 'termin', due_date: todayISO() }, load);
     $$('.ev[data-ev]', main).forEach((el) => el.onclick = (e) => { e.stopPropagation(); openTask(Number(el.dataset.ev), load); });
     $$('.ev.bday', main).forEach((el) => el.onclick = (e) => { e.stopPropagation(); location.hash = '#/kunden/' + el.dataset.cust; });
+    $$('.ev[data-abs]', main).forEach((el) => el.onclick = (e) => { e.stopPropagation(); openAbsenceForm(data.absences.find((a) => a.id === Number(el.dataset.abs)), load); });
+    $('#cal-abs').onclick = () => openAbsenceForm({}, load);
     $$('.cell', main).forEach((el) => el.onclick = (e) => { if (e.target.closest('.more')) { showDay(el.dataset.day, data, load); return; } openTaskForm({ kind: 'termin', due_date: el.dataset.day }, load); });
   };
   await load();
 }
 function showDay(day, data, reload) {
   const items = data.tasks.filter((t) => t.due_date === day);
-  const m = modal({ title: `${WD_LONG[parseISO(day).getDay()]}, ${deDate(day)}`, body: `<ul class="tasklist">${items.map((t) => taskItem(t)).join('')}</ul>` });
+  const abs = absOn(data.absences, day);
+  const m = modal({ title: `${WD_LONG[parseISO(day).getDay()]}, ${deDate(day)}`, body: `${abs.length ? `<div style="display:grid;gap:4px;margin-bottom:10px">${abs.map((a) => absHtml(a, true)).join('')}</div>` : ''}<ul class="tasklist">${items.map((t) => taskItem(t)).join('')}</ul>` });
   bindTaskList(m.el, () => { m.close(); reload(); });
 }
 

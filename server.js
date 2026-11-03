@@ -703,6 +703,7 @@ app.get('/api/dashboard', auth, (req, res) => {
     week: all(`${TASK_SQL} WHERE t.due_date BETWEEN ? AND ? ${who} ORDER BY t.due_date, t.due_time IS NOT NULL, t.due_time`, monday, sunday, ...whoP),
     open: all(`${TASK_SQL} WHERE t.status='open' ${who} ORDER BY t.due_date, t.due_time IS NOT NULL, t.due_time LIMIT 300`, ...whoP),
     birthdaysWeek: birthdaysBetween(monday, sunday),
+    absences: absencesBetween(monday, sunday, scope === 'all' ? null : whoId, req.user),
     birthdaysUpcoming: birthdaysBetween(U.today(), U.addDays(U.today(), 30)),
     delegated: all(`${TASK_SQL} WHERE t.status='open' AND t.created_by=? AND t.assigned_to<>? ORDER BY t.due_date LIMIT 50`, req.user.id, req.user.id),
     stats: {
@@ -721,7 +722,74 @@ app.get('/api/calendar', auth, (req, res) => {
   res.json({
     tasks: all(`${TASK_SQL} WHERE t.due_date BETWEEN ? AND ? ${who} ORDER BY t.due_date, t.due_time IS NOT NULL, t.due_time`, req.query.from, req.query.to, ...(scope === 'all' ? [] : [scope, scope])),
     birthdays: birthdaysBetween(req.query.from, req.query.to),
+    absences: absencesBetween(req.query.from, req.query.to, scope === 'all' ? null : scope, req.user),
   });
+});
+
+// ---------- Abwesenheiten (Urlaub, privat geblockt …) ----------
+/** Notizen sieht nur der Mitarbeiter selbst (und Admins) */
+function absencesBetween(from, to, userId, viewer) {
+  return all(`SELECT a.*, u.name user_name, u.color user_color FROM absences a JOIN users u ON u.id=a.user_id
+    WHERE a.start_date<=? AND a.end_date>=? ${userId ? 'AND a.user_id=?' : ''} ORDER BY a.start_date, u.name`, to, from, ...(userId ? [userId] : []))
+    .map((a) => (a.user_id === viewer.id || viewer.role === 'admin' ? a : { ...a, note: '' }));
+}
+function cleanAbsence(b, req) {
+  const a = {
+    user_id: req.user.role === 'admin' && b.user_id && get('SELECT id FROM users WHERE id=?', b.user_id) ? Number(b.user_id) : req.user.id,
+    kind: U.ABSENCE_KINDS[b.kind] ? b.kind : 'urlaub',
+    start_date: U.isDate(b.start_date) ? b.start_date : null,
+    end_date: U.isDate(b.end_date) ? b.end_date : (U.isDate(b.start_date) ? b.start_date : null),
+    start_time: U.isTime(b.start_time) ? b.start_time : null,
+    end_time: U.isTime(b.end_time) ? b.end_time : null,
+    note: U.str(b.note, 1000) || '',
+  };
+  if (!a.start_date) return { error: 'Bitte ein Datum angeben' };
+  if (a.end_date < a.start_date) return { error: 'Das Enddatum liegt vor dem Startdatum' };
+  if (!a.start_time || !a.end_time || a.start_date !== a.end_date) { a.start_time = a.start_date === a.end_date ? a.start_time : null; a.end_time = a.start_date === a.end_date ? a.end_time : null; }
+  if (!a.start_time || !a.end_time) { a.start_time = null; a.end_time = null; }
+  if (a.start_time && a.end_time <= a.start_time) return { error: 'Die Endzeit liegt vor der Startzeit' };
+  return { a };
+}
+app.get('/api/absences', auth, (req, res) => {
+  const from = U.isDate(req.query.from) ? req.query.from : U.today();
+  const to = U.isDate(req.query.to) ? req.query.to : U.addMonths(from, 12);
+  const uid = /^\d+$/.test(req.query.user || '') ? Number(req.query.user) : null;
+  res.json(absencesBetween(from, to, uid, req.user));
+});
+/** Prüft, wer an einem Tag abwesend ist (Warnung beim Planen von Terminen) */
+app.get('/api/absences/check', auth, (req, res) => {
+  if (!U.isDate(req.query.date)) return res.json([]);
+  const ids = String(req.query.users || '').split(',').map(Number).filter(Number.isInteger);
+  if (!ids.length) return res.json([]);
+  const time = U.isTime(req.query.time) ? req.query.time : null;
+  res.json(absencesBetween(req.query.date, req.query.date, null, req.user)
+    .filter((a) => ids.includes(a.user_id))
+    .filter((a) => !a.start_time || !time || (time >= a.start_time && time < a.end_time))
+    .map((a) => ({ user_id: a.user_id, user_name: a.user_name, kind: a.kind, label: U.ABSENCE_KINDS[a.kind], start_time: a.start_time, end_time: a.end_time })));
+});
+app.post('/api/absences', auth, (req, res) => {
+  const { a, error } = cleanAbsence(req.body || {}, req);
+  if (error) return bad(res, error);
+  const r = run('INSERT INTO absences(user_id, kind, start_date, end_date, start_time, end_time, note, created_by) VALUES(?,?,?,?,?,?,?,?)',
+    a.user_id, a.kind, a.start_date, a.end_date, a.start_time, a.end_time, a.note, req.user.id);
+  res.json({ id: Number(r.lastInsertRowid) });
+});
+app.put('/api/absences/:id', auth, (req, res) => {
+  const old = get('SELECT * FROM absences WHERE id=?', req.params.id);
+  if (!old) return res.status(404).json({ error: 'Nicht gefunden' });
+  if (old.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Nur der Mitarbeiter selbst kann das ändern' });
+  const { a, error } = cleanAbsence({ ...old, ...req.body, user_id: req.body.user_id ?? old.user_id }, req);
+  if (error) return bad(res, error);
+  run('UPDATE absences SET user_id=?, kind=?, start_date=?, end_date=?, start_time=?, end_time=?, note=? WHERE id=?',
+    req.user.role === 'admin' ? a.user_id : old.user_id, a.kind, a.start_date, a.end_date, a.start_time, a.end_time, a.note, old.id);
+  res.json({ ok: true });
+});
+app.delete('/api/absences/:id', auth, (req, res) => {
+  const old = get('SELECT * FROM absences WHERE id=?', req.params.id);
+  if (!old) return res.status(404).json({ error: 'Nicht gefunden' });
+  if (old.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Nur der Mitarbeiter selbst kann das löschen' });
+  run('DELETE FROM absences WHERE id=?', old.id);
+  res.json({ ok: true });
 });
 
 // ---------- Hinweise ----------

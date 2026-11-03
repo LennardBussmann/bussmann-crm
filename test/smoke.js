@@ -236,6 +236,27 @@ const U = require('../lib/util');
     await call('a', 'PUT', `/api/customers/${buyer}`, { street: 'Neue Straße 1' });
     assert.equal((await call('a', 'GET', `/api/customers/${buyer}`)).customer.geo_status, '', 'Adressänderung muss neu verorten');
 
+    // Abwesenheiten
+    const d1 = U.addDays(U.today(), 20); const d3 = U.addDays(U.today(), 22);
+    const absId = (await call('k', 'POST', '/api/absences', { kind: 'urlaub', start_date: d1, end_date: d3, note: 'Mallorca' })).id;
+    const multi = (await call('k', 'POST', '/api/absences', { kind: 'privat', start_date: d1, start_time: '08:00', end_time: '10:00', end_date: U.addDays(d1, 5) })).id;
+    assert.equal((await call('k', 'GET', '/api/absences?user=' + kollege.id)).find((x) => x.id === multi).start_time, null, 'mehrtägig = ganztägig');
+    await call('k', 'DELETE', '/api/absences/' + multi);
+    let chk = await call('a', 'GET', `/api/absences/check?date=${U.addDays(d1, 1)}&users=${kollege.id},${me.user.id}`);
+    assert.equal(chk.length, 1); assert.equal(chk[0].label, 'Urlaub');
+    assert.equal((await call('a', 'GET', `/api/absences/check?date=${U.addDays(d3, 1)}&users=${kollege.id}`)).length, 0);
+    const calAll = await call('t', 'GET', `/api/calendar?from=${d1}&to=${d3}&scope=all`);
+    const seen = calAll.absences.find((x) => x.id === absId);
+    assert.ok(seen && seen.note === '', 'Kollegen dürfen die Notiz nicht sehen');
+    assert.equal((await call('k', 'GET', `/api/calendar?from=${d1}&to=${d3}`)).absences[0].note, 'Mallorca');
+    await assert.rejects(call('t', 'DELETE', `/api/absences/${absId}`), /403/);
+    const part = (await call('t', 'POST', '/api/absences', { kind: 'privat', start_date: d1, start_time: '08:00', end_time: '10:00' })).id;
+    assert.equal((await call('a', 'GET', `/api/absences/check?date=${d1}&time=09:00&users=${third.id}`)).length, 1);
+    assert.equal((await call('a', 'GET', `/api/absences/check?date=${d1}&time=11:00&users=${third.id}`)).length, 0);
+    await call('t', 'DELETE', `/api/absences/${part}`);
+    const kFeed = await (await fetch(base + new URL((await call('k', 'GET', '/api/me/ical')).https).pathname)).text();
+    assert.ok(kFeed.includes('SUMMARY:Urlaub: Mallorca'));
+
     // iCal
     const ical = await call('a', 'GET', '/api/me/ical');
     const feed = await (await fetch(base + new URL(ical.https).pathname)).text();
