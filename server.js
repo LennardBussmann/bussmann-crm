@@ -20,7 +20,7 @@ app.disable('x-powered-by');
 
 app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
-  res.set('Referrer-Policy', 'same-origin');
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin'); // OSM-Kacheln brauchen die Herkunft
   res.set('X-Frame-Options', 'SAMEORIGIN');
   next();
 });
