@@ -41,6 +41,8 @@ docker compose -f deploy/compose.prod.yml --env-file deploy/.env restart caddy
 
 echo "==> Tägliche Datensicherung (03:00, 30 Tage aufbewahrt)"
 echo "0 3 * * * root bash ${APP_DIR}/deploy/backup.sh >> /var/log/bussmann-crm-backup.log 2>&1" > /etc/cron.d/bussmann-crm-backup
+echo "==> Automatische Updates (Prüfung alle 10 Minuten)"
+echo "*/10 * * * * root bash ${APP_DIR}/deploy/auto-update.sh >> /var/log/bussmann-crm-update.log 2>&1" > /etc/cron.d/bussmann-crm-update
 
 echo
 echo "Fertig! In 1–2 Minuten erreichbar unter: https://${DOMAIN}"

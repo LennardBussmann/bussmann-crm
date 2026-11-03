@@ -229,6 +229,22 @@ function route() {
 }
 window.addEventListener('hashchange', route);
 
+/** Erkennt eine neu eingespielte Version und bietet Neuladen an (kein Strg+F5 nötig) */
+async function watchVersion() {
+  const get = () => fetch('/api/version', { cache: 'no-store' }).then((r) => r.json()).catch(() => null);
+  const first = await get();
+  if (!first) return;
+  state.version = first;
+  const check = async () => {
+    const v = await get();
+    if (!v || v.commit === first.commit || $('#update-bar')) return;
+    document.body.insertAdjacentHTML('beforeend', `<div id="update-bar" class="update-bar">${icon('repeat')} <span>Eine neue Version des CRM ist da${v.subject ? `: <b>${esc(v.subject.split(/[,;]/)[0])}</b>` : ''}.</span> <button class="btn primary sm" id="update-reload">Jetzt neu laden</button></div>`);
+    $('#update-reload').onclick = () => location.reload();
+  };
+  setInterval(check, 3 * 60000);
+  window.addEventListener('focus', check);
+}
+
 async function boot() {
   try {
     const me = await api('/me', { allow401: true });
@@ -237,6 +253,7 @@ async function boot() {
     renderShell();
     route();
     setInterval(refreshUnread, 60000);
+    watchVersion();
   } catch {
     const s = await fetch('/api/setup').then((r) => r.json()).catch(() => ({}));
     s.needsSetup ? renderSetup() : renderLogin();
@@ -1364,7 +1381,7 @@ async function viewSettings(main) {
   const ical = await api('/me/ical');
   const isAdmin = state.me.role === 'admin';
   main.innerHTML = `
-    <div class="page-head"><h1>Einstellungen</h1></div>
+    <div class="page-head"><h1>Einstellungen</h1>${state.version && state.version.commit !== 'dev' ? `<span class="muted small" title="${esc(state.version.subject)}">Version ${esc(state.version.commit)} vom ${esc(state.version.date)} · automatische Updates aktiv</span>` : ''}</div>
     <div style="display:grid;gap:18px;max-width:900px">
       <div class="card"><div class="card-head"><h2>${icon('cal', 'lg')} Kalender mit Outlook &amp; iPhone verbinden</h2></div><div class="card-body">
         <p style="margin-top:0">Ihre Termine und Aufgaben aus dem CRM erscheinen als abonnierter Kalender in Outlook und auf dem iPhone (inkl. Kundengeburtstagen). Neue Einträge werden automatisch übernommen – Outlook aktualisiert je nach Version alle paar Stunden, das iPhone je nach Einstellung alle 15 Minuten bis stündlich.</p>

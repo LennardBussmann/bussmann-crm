@@ -415,3 +415,6 @@ button.chip.tagchip { border: 1px dashed var(--line-strong); cursor: pointer; fo
   #bigmap { height: 60vh; min-height: 320px; }
   .tour { min-height: 0; max-height: none; }
 }
+
+.update-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 3000; background: var(--ink); color: #fff; padding: 10px 12px 10px 16px; border-radius: 10px; box-shadow: var(--shadow-lg); display: flex; gap: 10px; align-items: center; font-size: 14px; max-width: calc(100% - 24px); }
+@media (max-width: 860px) { .update-bar { bottom: 80px; } }

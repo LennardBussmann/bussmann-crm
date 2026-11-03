@@ -873,6 +873,11 @@ app.get('/Bussmann-CRM.url', (req, res) => {
   res.set('Content-Disposition', 'attachment; filename="Bussmann CRM.url"');
   res.send(`[InternetShortcut]\r\nURL=${base}/\r\nIconFile=${base}/favicon.ico\r\nIconIndex=0\r\n`);
 });
+app.get('/api/version', (req, res) => {
+  let v = {};
+  try { v = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'version.json'), 'utf8')); } catch { /* lokal / alte Installation */ }
+  res.set('Cache-Control', 'no-store').json({ commit: v.commit || 'dev', subject: v.subject || '', date: v.date || '', installed: v.installed || '' });
+});
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 // HTML/JS/CSS immer neu prüfen (ETag), damit Updates sofort ankommen
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', setHeaders: (res, p) => res.set('Cache-Control', /\.(png|ico)$/.test(p) ? 'public, max-age=86400' : 'no-cache') }));
