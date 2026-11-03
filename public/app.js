@@ -31,7 +31,7 @@ const debounce = (fn, ms = 250) => { let t; return (...a) => { clearTimeout(t); 
 const telHref = (n) => 'tel:' + String(n).replace(/[^\d+]/g, '');
 const fmtSize = (b) => (b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
 
-const TYPES = ['Kommune', 'Privat', 'Landwirt', 'Forst', 'Gewerbe'];
+const TYPES = ['Landwirt', 'Gartenbau', 'Forst', 'Kommune', 'Gewerbe', 'Privat'];
 const INTERVALS = { '': 'Kein Intervall', monthly: 'Monatlich', quarterly: 'Vierteljährlich', halfyearly: 'Halbjährlich', yearly: 'Jährlich' };
 const TASK_KINDS = { anruf: 'Anruf', termin: 'Termin', besuch: 'Besuch', angebot: 'Angebot', aufgabe: 'Aufgabe' };
 const ENTRY_KINDS = { besuch: 'Besuch', telefonat: 'Telefonat', email: 'E-Mail', termin: 'Termin', notiz: 'Notiz', sonstiges: 'Sonstiges' };
@@ -134,6 +134,23 @@ const formData = (form) => {
 };
 const userOptions = (selected, { empty } = {}) => (empty ? `<option value="">${empty}</option>` : '') +
   state.users.filter((u) => u.active || u.id === Number(selected)).map((u) => `<option value="${u.id}" ${Number(selected) === u.id ? 'selected' : ''}>${esc(u.name)}${u.id === state.me.id ? ' (ich)' : ''}</option>`).join('');
+/** Auswahl weiterer Teilnehmer (Kollegen, die zum Termin mitkommen / eingeladen werden) */
+const participantsHtml = (selected = []) => {
+  const users = state.users.filter((u) => u.active || selected.includes(u.id));
+  if (users.length < 2) return '<div class="muted small">Weitere Mitarbeiter können eingeladen werden, sobald es mehrere Benutzer gibt.</div>';
+  return `<div class="parts" data-parts>${users.map((u) => `<label class="pchip"><input type="checkbox" value="${u.id}" ${selected.includes(u.id) ? 'checked' : ''}><span class="avatar xs" style="background:${esc(u.color || '#6a6d6e')}">${esc(initials(u.name))}</span>${esc(u.name)}${u.id === state.me.id ? ' (ich)' : ''}</label>`).join('')}</div>`;
+};
+const readParticipants = (root) => $$('[data-parts] input:checked', root).map((i) => Number(i.value));
+/** Zuständigen in der Teilnehmerliste ausblenden */
+function bindParticipants(root, assignSel) {
+  const sync = () => $$('[data-parts] .pchip', root).forEach((l) => {
+    const isLead = $('input', l).value === assignSel.value;
+    l.classList.toggle('hidden', isLead);
+    if (isLead) $('input', l).checked = false;
+  });
+  assignSel.addEventListener('change', sync); sync();
+}
+const partIds = (t) => (t.participant_ids ? String(t.participant_ids).split(',').map(Number) : []);
 const userColor = (id) => state.users.find((u) => u.id === id)?.color || '#6a6d6e';
 const avatar = (name, id, cls = '') => `<span class="avatar ${cls}" style="background:${esc(userColor(id))}" title="${esc(name || '')}">${esc(initials(name))}</span>`;
 
@@ -335,6 +352,7 @@ function taskItem(t, { showAssignee = true, showCustomer = true } = {}) {
         <span>${icon(TASK_ICON[t.kind])} ${TASK_KINDS[t.kind]}</span>
         ${showCustomer && cust ? `<span>${icon('user')} ${esc(cust)}</span>` : ''}
         ${showAssignee && t.assignee ? `<span title="Zuständig">${avatar(t.assignee, t.assigned_to, 'xs')} ${esc(t.assignee)}</span>` : ''}
+        ${t.participant_names ? `<span title="Weitere Teilnehmer: ${esc(t.participant_names)}">${icon('users')} ${partIds(t).includes(state.me.id) && t.assigned_to !== state.me.id ? 'eingeladen · ' : ''}mit ${esc(t.participant_names)}</span>` : ''}
         ${t.auto_visit ? '<span class="chip">Besuchsintervall</span>' : ''}
         ${t.file_count ? `<span title="Bilder/Dateien">${icon('link')} ${t.file_count}</span>` : ''}
       </div>
@@ -377,6 +395,7 @@ async function openTask(id, reload) {
       ${t.c_mobile || t.c_phone ? `<span class="k">Telefon</span><span>${[t.c_mobile, t.c_phone].filter(Boolean).map((n) => `<a href="${telHref(n)}">${esc(n)}</a>`).join(' · ')}</span>` : ''}
       ${t.location ? `<span class="k">Ort</span><span>${esc(t.location)}</span>` : ''}
       <span class="k">Zuständig</span><span>${esc(t.assignee || '–')}</span>
+      ${t.participant_names ? `<span class="k">Teilnehmer</span><span>${esc(t.participant_names)}</span>` : ''}
       <span class="k">Erstellt von</span><span>${esc(t.creator || 'System')} am ${deDateTime(t.created_at.replace(' ', 'T'))}</span>
       <span class="k">Erinnerung</span><span>${t.remind_day_before ? 'Einen Tag vorher' : 'Keine'}</span>
     </div>
@@ -444,6 +463,7 @@ function taskFields(t = {}, prefix = '') {
     <div class="field"><label>Uhrzeit <span class="muted">(leer = ganztägig)</span></label><input type="time" name="${prefix}due_time" value="${esc(t.due_time || '')}"></div>
     <div class="field"><label>Dauer</label><select name="${prefix}duration_min">${[15, 30, 45, 60, 90, 120, 180, 240, 480].map((n) => `<option value="${n}" ${Number(t.duration_min || 60) === n ? 'selected' : ''}>${n < 60 ? n + ' Min.' : n / 60 + ' Std.'}</option>`).join('')}</select></div>
     <div class="field"><label>Ort / Treffpunkt</label><input type="text" name="${prefix}location" value="${esc(t.location || '')}" placeholder="leer = Kundenadresse"></div>
+    <div class="field full"><label>Weitere Teilnehmer <span class="muted">(werden eingeladen, bekommen eine E-Mail und sehen den Termin in ihrem Kalender)</span></label>${participantsHtml(partIds(t))}</div>
     <div class="field full"><label>Beschreibung</label><textarea name="${prefix}description" rows="3">${esc(t.description || '')}</textarea></div>
     ${prefix ? '' : `<div class="field full"><label>Bilder / Dateien</label><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${fileInputHtml('id="tf-files"')}<span class="muted small" id="tf-files-out"></span></div></div>`}
     <div class="field full"><label class="check"><input type="checkbox" name="${prefix}remind_day_before" ${t.remind_day_before === 0 ? '' : 'checked'}> Einen Tag vorher erinnern (in der App${state.mailEnabled ? ', per E-Mail' : ''} und im Kalender-Abo)</label></div>
@@ -460,10 +480,11 @@ function openTaskForm(t = {}, reload, presetCustomer) {
   const initCust = presetCustomer || (t.customer_id ? { id: t.customer_id, name: taskCust(t) } : null);
   const picker = customerPicker($('#tf-cust', m.el), initCust);
   pickedList($('#tf-files', m.el), $('#tf-files-out', m.el));
+  bindParticipants(m.el, $('[name=assigned_to]', m.el));
   $('#tf-save', m.el).onclick = async () => {
     const f = $('#tf', m.el);
     if (!f.reportValidity()) return;
-    const body = { ...formData(f), customer_id: picker.get() };
+    const body = { ...formData(f), customer_id: picker.get(), participants: readParticipants(m.el) };
     try {
       let taskId = t.id;
       if (isEdit) await api('/tasks/' + t.id, { method: 'PUT', body });
@@ -471,7 +492,9 @@ function openTaskForm(t = {}, reload, presetCustomer) {
       const files = [...$('#tf-files', m.el).files];
       if (files.length) { $('#tf-save', m.el).disabled = true; $('#tf-save', m.el).textContent = 'Lädt hoch …'; await uploadTaskFiles(taskId, files); }
       m.close();
-      const other = Number(body.assigned_to) !== state.me.id ? ` – ${state.users.find((u) => u.id === Number(body.assigned_to))?.name} wurde benachrichtigt` : '';
+      const invited = body.participants.filter((id) => id !== state.me.id && !partIds(t).includes(id)).length;
+      const other = (Number(body.assigned_to) !== state.me.id ? ` – ${state.users.find((u) => u.id === Number(body.assigned_to))?.name} wurde benachrichtigt` : '')
+        + (invited ? ` – ${invited} Teilnehmer eingeladen` : '');
       toast((isEdit ? 'Gespeichert' : 'Aufgabe angelegt') + other);
       reload ? reload() : route();
     } catch (e) { fail(e); }
@@ -551,7 +574,7 @@ function evHtml(t, showWho) {
   return `<div class="ev k-${t.kind} ${t.status === 'done' ? 'done' : ''} ${over ? 'overdue' : ''}" data-ev="${t.id}" title="${esc(TASK_KINDS[t.kind] + ': ' + t.title + (cust ? ' – ' + cust : ''))}">
     <div class="t">${t.due_time ? t.due_time : 'ganztägig'} · ${TASK_KINDS[t.kind]}</div>
     <div class="ttl">${esc(t.title)}</div>
-    ${showWho && t.assignee ? `<div class="who">${esc(t.assignee)}</div>` : ''}
+    ${showWho && t.assignee ? `<div class="who">${esc(t.assignee)}${t.participant_names ? ' + ' + esc(t.participant_names) : ''}</div>` : (t.participant_names ? `<div class="who">${icon('users')} +${partIds(t).length}</div>` : '')}
   </div>`;
 }
 function isoWeek(d) {
@@ -562,44 +585,84 @@ function isoWeek(d) {
 }
 
 // ======================= Kundenliste =======================
+const CONTACT_TABS = [
+  ['', 'Alle Kunden', 'all'],
+  ['m1', 'Kontakt im letzten Monat', 'm1'],
+  ['m3', 'vor 1–3 Monaten', 'm3'],
+  ['m6', 'vor 3–6 Monaten', 'm6'],
+  ['old', 'länger als 6 Monate / nie', 'old'],
+];
+const CUST_DEFAULTS = { q: '', type: '', status: '', sort: 'name', owner: '', interval: '', extra: '', contact: '' };
 async function viewCustomers(main) {
-  const st = { q: sessionStorage.getItem('custQ') || '', type: '', sort: 'name', owner: '' };
-  sessionStorage.removeItem('custQ');
+  let saved = {};
+  try { saved = JSON.parse(sessionStorage.getItem('custFilter') || '{}'); } catch { /* egal */ }
+  const st = { ...CUST_DEFAULTS, ...saved };
+  if (sessionStorage.getItem('custQ')) { st.q = sessionStorage.getItem('custQ'); sessionStorage.removeItem('custQ'); }
+  const save = () => { try { sessionStorage.setItem('custFilter', JSON.stringify(st)); } catch { /* egal */ } };
+  const others = state.users.filter((u) => u.active && u.id !== state.me.id);
   main.innerHTML = `
     <div class="page-head"><h1>Kunden</h1>
       <button class="btn" id="c-import">${icon('upload')} Excel-Import</button>
-      <button class="btn" id="c-export">${icon('download')} Export</button>
+      <button class="btn" id="c-export" title="Exportiert die aktuell gefilterte Liste">${icon('download')} Export</button>
       <button class="btn primary" id="c-new">${icon('plus')} Kunde anlegen</button></div>
+    <div class="card" style="margin-bottom:14px"><div class="tabs ctabs" id="c-contact">${CONTACT_TABS.map(([k, l]) => `<button data-c="${k}" class="${st.contact === k ? 'on' : ''}">${l} <span class="badge grey" data-cnt="${k || 'all'}"></span></button>`).join('')}</div></div>
     <div class="toolbar">
       <div class="grow"><span class="ico">${icon('search')}</span><input type="search" id="c-q" placeholder="Suchen nach Name, Ort, PLZ, Straße, E-Mail, Telefon, Info …" value="${esc(st.q)}"></div>
-      <select id="c-sort"><option value="name">Sortierung: Name</option><option value="city">Ort</option><option value="contact">Letzter Kontakt</option><option value="newest">Neueste zuerst</option></select>
-      <select id="c-owner"><option value="">Alle Betreuer</option><option value="me">Nur meine Kunden</option></select>
+      <select id="c-sort" title="Sortierung"><option value="name">Sortierung: Name</option><option value="city">Ort</option><option value="zip">PLZ</option><option value="contact">Letzter Kontakt (neueste)</option><option value="contact_old">Letzter Kontakt (am längsten her)</option><option value="newest">Neu angelegt</option></select>
     </div>
-    <div class="seg" id="c-types" style="margin-bottom:14px"><button class="on" data-t="">Alle</button>${TYPES.map((t) => `<button data-t="${t}">${t}</button>`).join('')}</div>
+    <div class="filters">
+      <div class="seg" id="c-status"><button data-s="">Alle</button><button data-s="buyer">${icon('check')} Kaufende Kunden</button><button data-s="lead" class="lead-btn">Interessenten</button></div>
+      <select id="c-type" title="Kundenart"><option value="">Alle Kundenarten</option>${TYPES.map((t) => `<option>${t}</option>`).join('')}<option value="none">ohne Kundenart</option></select>
+      <select id="c-owner" title="Betreuer"><option value="">Alle Betreuer</option><option value="me">Meine Kunden</option>${others.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}<option value="none">ohne Betreuer</option></select>
+      <select id="c-interval" title="Besuchsintervall"><option value="">Alle Intervalle</option><option value="any">mit Besuchsintervall</option>${Object.entries(INTERVALS).filter(([k]) => k).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}<option value="none">ohne Intervall</option></select>
+      <select id="c-extra" title="Weitere Filter"><option value="">Weitere Filter …</option><option value="visit_due">Besuch fällig / überfällig</option><option value="open_tasks">mit offenen Aufgaben</option><option value="no_tasks">ohne offene Aufgaben</option><option value="bday_month">Geburtstag diesen Monat</option><option value="new30">in den letzten 30 Tagen angelegt</option><option value="no_phone">ohne Telefonnummer</option><option value="no_email">ohne E-Mail</option></select>
+      <button class="btn ghost sm hidden" id="c-reset">${icon('x')} Filter zurücksetzen</button>
+    </div>
     <div class="card"><div class="table-wrap" id="c-table"></div></div>`;
+  const syncControls = () => {
+    $('#c-sort').value = st.sort; $('#c-type').value = st.type; $('#c-owner').value = st.owner; $('#c-interval').value = st.interval; $('#c-extra').value = st.extra;
+    $$('#c-status button').forEach((b) => b.classList.toggle('on', b.dataset.s === st.status));
+    $$('#c-contact button').forEach((b) => b.classList.toggle('on', b.dataset.c === st.contact));
+    const active = ['type', 'status', 'owner', 'interval', 'extra', 'q'].some((k) => st[k]);
+    $('#c-reset').classList.toggle('hidden', !active);
+    ['c-type', 'c-owner', 'c-interval', 'c-extra'].forEach((id) => $('#' + id).classList.toggle('active', !!$('#' + id).value));
+  };
   const load = async () => {
-    const qs = new URLSearchParams({ q: st.q, type: st.type, sort: st.sort, owner: st.owner });
-    const data = await api('/customers?' + qs);
+    save(); syncControls();
+    const data = await api('/customers?' + new URLSearchParams(st));
+    for (const [k, v] of Object.entries(data.counts || {})) { const el = $(`[data-cnt="${k}"]`); if (el) el.textContent = v; }
     const adm = state.me.role === 'admin';
-    $('#c-table').innerHTML = data.rows.length ? `${adm ? `<div class="bulkbar hidden" id="c-bulk"><span id="c-bulk-n"></span><button class="btn danger sm" id="c-bulk-del">${icon('trash')} Ausgewählte löschen</button></div>` : ''}<table class="list"><thead><tr>${adm ? '<th style="width:36px"><input type="checkbox" id="c-all" title="Alle auswählen"></th>' : ''}<th>Name</th><th>Ort</th><th class="hide-m">Kundenart</th><th class="hide-m">E-Mail</th><th>Telefon</th><th class="hide-m">Betreuer</th><th class="hide-m">Letzter Kontakt</th></tr></thead><tbody>
-      ${data.rows.map((c) => `<tr data-id="${c.id}">${adm ? `<td onclick="event.stopPropagation()"><input type="checkbox" class="c-sel" value="${c.id}"></td>` : ''}
-        <td class="name">${esc(custName(c))}${c.company && c.company !== c.last_name ? `<div class="muted small" style="font-weight:400">${esc(c.company)}</div>` : ''}</td>
+    $('#c-table').innerHTML = data.rows.length ? `<div class="bulkbar hidden" id="c-bulk"><span id="c-bulk-n"></span>
+        <button class="btn sm" data-bulk="buyer">${icon('check')} Als kaufender Kunde</button>
+        <button class="btn sm" data-bulk="lead">Als Interessent</button>
+        <select id="c-bulk-type" class="sm" style="width:auto"><option value="">Kundenart setzen …</option>${TYPES.map((t) => `<option>${t}</option>`).join('')}</select>
+        <select id="c-bulk-owner" class="sm" style="width:auto"><option value="">Betreuer setzen …</option>${userOptions(null)}</select>
+        ${adm ? `<button class="btn danger sm" id="c-bulk-del">${icon('trash')} Löschen</button>` : ''}</div>
+      <div class="legend"><span class="sw lead"></span> grün = Interessent (noch kein kaufender Kunde) · <span>${data.counts?.buyers ?? 0} kaufende Kunden, ${(data.counts?.all ?? 0) - (data.counts?.buyers ?? 0)} Interessenten in dieser Auswahl</span></div>
+      <table class="list"><thead><tr><th style="width:36px"><input type="checkbox" id="c-all" title="Alle auswählen"></th><th>Name</th><th>Ort</th><th class="hide-m">Kundenart</th><th class="hide-m">E-Mail</th><th>Telefon</th><th class="hide-m">Betreuer</th><th class="hide-m">Letzter Kontakt</th></tr></thead><tbody>
+      ${data.rows.map((c) => `<tr data-id="${c.id}" class="${c.is_buyer ? '' : 'lead'}"><td onclick="event.stopPropagation()"><input type="checkbox" class="c-sel" value="${c.id}"></td>
+        <td class="name">${esc(custName(c))}${c.is_buyer ? '' : ' <span class="chip lead">Interessent</span>'}${c.company && c.company !== c.last_name ? `<div class="muted small" style="font-weight:400">${esc(c.company)}</div>` : ''}</td>
         <td>${esc([c.zip, c.city].filter(Boolean).join(' '))}</td>
         <td class="hide-m">${c.customer_type ? `<span class="chip t-${c.customer_type}">${c.customer_type}</span>` : ''}</td>
         <td class="hide-m">${c.email ? `<a href="mailto:${esc(c.email)}" onclick="event.stopPropagation()">${esc(c.email)}</a>` : ''}</td>
         <td class="nowrap">${[c.mobile, c.phone].filter(Boolean).map((n) => `<a href="${telHref(n)}" onclick="event.stopPropagation()">${esc(n)}</a>`).join('<br>')}</td>
         <td class="hide-m">${c.owner_name ? `${avatar(c.owner_name, c.owner_id, 'xs')} ${esc(c.owner_name)}` : ''}</td>
-        <td class="hide-m nowrap">${c.last_contact ? deDate(c.last_contact) : '<span class="muted">–</span>'}${c.open_tasks ? ` <span class="badge grey" title="offene Aufgaben">${c.open_tasks}</span>` : ''}</td>
+        <td class="hide-m nowrap">${c.last_contact ? `${deDate(c.last_contact)} <span class="muted small">${agoText(c.last_contact)}</span>` : '<span class="muted">noch kein Kontakt</span>'}${c.open_tasks ? ` <span class="badge grey" title="offene Aufgaben">${c.open_tasks}</span>` : ''}</td>
       </tr>`).join('')}</tbody></table>
       <div class="list-foot"><span>${data.rows.length}${data.more ? '+' : ''} von ${data.total} Kunden</span><span>Klick auf eine Zeile öffnet den Kunden</span></div>`
-      : `<div class="empty">${data.total ? 'Keine Kunden gefunden.' : 'Noch keine Kunden. Legen Sie den ersten Kunden an oder importieren Sie eine Excel-Liste.'}</div>`;
+      : `<div class="empty">${data.total ? 'Keine Kunden für diese Auswahl.' : 'Noch keine Kunden. Legen Sie den ersten Kunden an oder importieren Sie eine Excel-Liste.'}</div>`;
     $$('tr[data-id]').forEach((tr) => tr.onclick = () => { location.hash = '#/kunden/' + tr.dataset.id; });
-    if (adm && data.rows.length) {
-      const upd = () => { const n = $$('.c-sel:checked').length; $('#c-bulk').classList.toggle('hidden', !n); $('#c-bulk-n').textContent = `${n} Kunde${n === 1 ? '' : 'n'} ausgewählt`; };
+    if (data.rows.length) {
+      const sel = () => $$('.c-sel:checked').map((cb) => Number(cb.value));
+      const upd = () => { const n = sel().length; $('#c-bulk').classList.toggle('hidden', !n); $('#c-bulk-n').textContent = `${n} ausgewählt`; };
       $$('.c-sel').forEach((cb) => cb.onchange = upd);
       $('#c-all').onchange = (e) => { $$('.c-sel').forEach((cb) => { cb.checked = e.target.checked; }); upd(); };
-      $('#c-bulk-del').onclick = async () => {
-        const ids = $$('.c-sel:checked').map((cb) => Number(cb.value));
+      const bulk = async (body, msg) => { try { const r = await api('/customers/bulk-update', { method: 'POST', body: { ids: sel(), ...body } }); toast(`${r.updated} Kunden ${msg}`); load(); } catch (e) { fail(e); } };
+      $$('[data-bulk]').forEach((b) => b.onclick = () => bulk({ is_buyer: b.dataset.bulk === 'buyer' }, b.dataset.bulk === 'buyer' ? 'als kaufende Kunden markiert' : 'als Interessenten markiert'));
+      $('#c-bulk-type').onchange = (e) => e.target.value && bulk({ customer_type: e.target.value }, `auf „${e.target.value}“ gesetzt`);
+      $('#c-bulk-owner').onchange = (e) => e.target.value && bulk({ owner_id: Number(e.target.value) }, 'neuem Betreuer zugeordnet');
+      if (adm) $('#c-bulk-del').onclick = async () => {
+        const ids = sel();
         if (!(await confirmBox(`<b>${ids.length} Kunden</b> mit allen Einträgen, Aufgaben und Dateien endgültig löschen?`))) return;
         try { const r = await api('/customers/bulk-delete', { method: 'POST', body: { ids } }); toast(`${r.deleted} Kunden gelöscht`); load(); } catch (e) { fail(e); }
       };
@@ -607,13 +670,27 @@ async function viewCustomers(main) {
   };
   $('#c-q').oninput = debounce((e) => { st.q = e.target.value; load(); }, 200);
   $('#c-sort').onchange = (e) => { st.sort = e.target.value; load(); };
-  $('#c-owner').onchange = (e) => { st.owner = e.target.value; load(); };
-  $$('#c-types button').forEach((b) => b.onclick = () => { $$('#c-types button').forEach((x) => x.classList.toggle('on', x === b)); st.type = b.dataset.t; load(); });
+  [['c-type', 'type'], ['c-owner', 'owner'], ['c-interval', 'interval'], ['c-extra', 'extra']].forEach(([id, k]) => { $('#' + id).onchange = (e) => { st[k] = e.target.value; load(); }; });
+  $$('#c-status button').forEach((b) => b.onclick = () => { st.status = b.dataset.s; load(); });
+  $$('#c-contact button').forEach((b) => b.onclick = () => {
+    st.contact = b.dataset.c;
+    if (st.contact && st.sort === 'name') st.sort = st.contact === 'm1' ? 'contact' : 'contact_old';
+    load();
+  });
+  $('#c-reset').onclick = () => { Object.assign(st, { ...CUST_DEFAULTS, contact: st.contact, sort: st.sort }); $('#c-q').value = ''; load(); };
   $('#c-new').onclick = () => openCustomerForm({}, (id) => { location.hash = '#/kunden/' + id; });
   $('#c-import').onclick = () => openImport(load);
-  $('#c-export').onclick = () => { location.href = '/api/customers/export.xlsx?' + new URLSearchParams({ q: st.q, type: st.type, sort: st.sort, owner: st.owner }); };
+  $('#c-export').onclick = () => { location.href = '/api/customers/export.xlsx?' + new URLSearchParams(st); };
   if (window.innerWidth > 860) $('#c-q').focus();
   await load();
+}
+function agoText(s) {
+  const days = Math.round((parseISO(todayISO()) - parseISO(s)) / 864e5);
+  if (days <= 0) return '(heute)';
+  if (days === 1) return '(gestern)';
+  if (days < 31) return `(vor ${days} Tagen)`;
+  const m = Math.round(days / 30.4);
+  return m < 12 ? `(vor ${m} Mon.)` : `(vor ${Math.floor(days / 365)} J.)`;
 }
 
 function openCustomerForm(c = {}, onSaved) {
@@ -635,7 +712,8 @@ function openCustomerForm(c = {}, onSaved) {
       <div class="field"><label>Handynummer</label><input type="tel" name="mobile" value="${esc(c.mobile || '')}"></div>
       <div class="field"><label>Festnetznummer</label><input type="tel" name="phone" value="${esc(c.phone || '')}"></div>
       <div class="field"><label>Besuchsintervall</label><select name="visit_interval">${Object.entries(INTERVALS).map(([k, v]) => `<option value="${k}" ${(c.visit_interval || '') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
-      <div class="field"><label>Betreuer</label><select name="owner_id">${userOptions(c.owner_id || state.me.id)}</select></div>
+      <div class="field"><label>Betreuer (Hauptzuständiger)</label><select name="owner_id">${userOptions(c.owner_id || state.me.id)}</select></div>
+      <div class="field full"><label class="check buyer-check"><input type="checkbox" name="is_buyer" ${c.is_buyer ? 'checked' : ''}> <b>Kaufender Kunde</b> <span class="muted">– hat bereits bei uns gekauft (ohne Haken = Interessent, in der Liste grün)</span></label></div>
       ${isEdit ? '' : '<div class="field full"><label>Infofeld (wichtige Infos, stehen immer oben)</label><textarea name="info" rows="3"></textarea></div>'}
       <div class="full callout info small">${icon('repeat')} Mit Besuchsintervall legt das CRM automatisch eine Besuchsaufgabe an (fällig: letzter Besuch + Intervall) und erinnert einen Tag vorher.</div>
     </div></form>`,
@@ -734,7 +812,8 @@ async function viewCustomer(id, tab) {
       <a class="btn ghost icon" href="#/kunden" title="Zurück zur Liste">${icon('back', 'lg')}</a>
       <span class="avatar lg" style="background:var(--red)">${esc(initials(custName(c)))}</span>
       <div class="title">
-        <h1>${esc([c.salutation && c.salutation !== 'Firma' ? c.salutation : '', c.first_name, c.last_name].filter(Boolean).join(' '))} ${c.customer_type ? `<span class="chip t-${c.customer_type}">${c.customer_type}</span>` : ''}</h1>
+        <h1>${esc([c.salutation && c.salutation !== 'Firma' ? c.salutation : '', c.first_name, c.last_name].filter(Boolean).join(' '))} ${c.customer_type ? `<span class="chip t-${c.customer_type}">${c.customer_type}</span>` : ''}
+          <button class="chip ${c.is_buyer ? 'ok' : 'lead'} chip-btn" id="cu-buyer" title="Klicken zum Umschalten">${c.is_buyer ? `${icon('check')} Kaufender Kunde` : 'Interessent'}</button></h1>
         <div class="muted">${esc([c.company, c.city].filter(Boolean).join(' · '))}${openTasks.length ? ` · <span style="color:var(--red);font-weight:700">${openTasks.length} offene Aufgabe${openTasks.length > 1 ? 'n' : ''}</span>` : ''}</div>
       </div>
       ${c.email ? `<a class="btn" href="mailto:${esc(c.email)}">${icon('mail')}<span class="hide-m">E-Mail</span></a>` : ''}
@@ -757,9 +836,10 @@ async function viewCustomer(id, tab) {
         <div class="section-title">Weitere Angaben</div>
         <ul class="facts">
           <li>${icon('cake')}<div><span class="k">Geburtsdatum</span>${c.birthday ? `${deDate(c.birthday)} <span class="muted">(${age} Jahre)</span>` : '–'}</div></li>
-          <li>${icon('tag')}<div><span class="k">Kundenart</span>${esc(c.customer_type || '–')}</div></li>
+          <li>${icon('tag')}<div><span class="k">Kundenart</span>${esc(c.customer_type || '–')} · ${c.is_buyer ? 'kaufender Kunde' : 'Interessent'}</div></li>
+          <li>${icon('clock')}<div><span class="k">Letzter Kontakt</span>${c.last_contact ? `${deDate(c.last_contact)} <span class="muted">${agoText(c.last_contact)}</span>` : 'noch keiner'}</div></li>
           <li>${icon('repeat')}<div><span class="k">Besuchsintervall</span>${c.visit_interval ? INTERVALS[c.visit_interval] : 'keins'}</div></li>
-          <li>${icon('user')}<div><span class="k">Betreuer</span>${esc(c.owner_name || '–')}</div></li>
+          <li>${icon('user')}<div><span class="k">Betreuer (Hauptzuständiger)</span>${esc(c.owner_name || '–')}</div></li>
         </ul>
         <div class="section-title">Verlauf</div>
         <div class="small muted">Angelegt am ${deDateTime(c.created_at.replace(' ', 'T'))}${c.created_by_name ? ` von <b>${esc(c.created_by_name)}</b>` : ''}<br>
@@ -782,6 +862,11 @@ async function viewCustomer(id, tab) {
     </div>`;
 
   $('#cu-edit').onclick = () => openCustomerForm(c, () => reload());
+  $('#cu-buyer').onclick = async () => {
+    const to = !c.is_buyer;
+    if (!(await confirmBox(to ? `<b>${esc(custName(c))}</b> als kaufenden Kunden markieren?` : `<b>${esc(custName(c))}</b> wieder als Interessent führen?`, 'Ja, umstellen'))) return;
+    try { await api('/customers/' + c.id, { method: 'PUT', body: { is_buyer: to } }); toast(to ? 'Als kaufender Kunde markiert' : 'Als Interessent markiert'); reload(); } catch (e) { fail(e); }
+  };
   // Infofeld
   const infoBox = $('#infobox');
   const startInfoEdit = () => {
@@ -830,6 +915,7 @@ function followupHtml(i, kind = 'anruf') {
       <div class="field"><label>Zuständig</label><select data-k="assigned_to">${userOptions(state.me.id)}</select></div>
       <label class="check" style="margin-top:22px"><input type="checkbox" data-k="remind_day_before" checked> 1 Tag vorher erinnern</label>
     </div>
+    <div class="field" style="margin-top:10px"><label>Weitere Teilnehmer (optional)</label>${participantsHtml([])}</div>
     <div class="field" style="margin-top:10px"><label>Notiz zur Aufgabe (optional)</label><input type="text" data-k="description" placeholder="z. B. Angebot für Aufsitzmäher, Budget ca. 5.000 €"></div>
     <div style="display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap">${fileInputHtml('data-files')}<span class="muted small" data-files-out></span></div>
   </div>`;
@@ -861,6 +947,7 @@ function renderTimeline(body, d, reload) {
     const el = $('#tl-fus', body).lastElementChild;
     $('[data-fu-del]', el).onclick = () => el.remove();
     pickedList($('[data-files]', el), $('[data-files-out]', el));
+    bindParticipants(el, $('[data-k=assigned_to]', el));
     $('[data-k=kind]', el).onchange = (e) => {
       const t = $('[data-k=title]', el);
       const defaults = { anruf: 'Kunde anrufen', termin: 'Termin', besuch: 'Besuch', angebot: 'Angebot erstellen', aufgabe: '' };
@@ -872,7 +959,7 @@ function renderTimeline(body, d, reload) {
     const text = $('#tl-text', body).value.trim();
     if (!text) { $('#tl-text', body).focus(); return toast('Bitte einen Text eingeben', true); }
     const tasks = $$('.followup', body).map((el) => {
-      const o = {}; $$('[data-k]', el).forEach((i) => { o[i.dataset.k] = i.type === 'checkbox' ? i.checked : i.value; }); return o;
+      const o = {}; $$('[data-k]', el).forEach((i) => { o[i.dataset.k] = i.type === 'checkbox' ? i.checked : i.value; }); o.participants = readParticipants(el); return o;
     });
     const fuFiles = $$('.followup', body).map((el) => [...$('[data-files]', el).files]);
     for (const t of tasks) if (!t.due_date) return toast('Bitte für jede Folgeaufgabe ein Datum angeben', true);
@@ -961,7 +1048,7 @@ async function viewTasks(main) {
     <div class="page-head"><h1>Aufgaben</h1><button class="btn primary" id="t-new">${icon('plus')} Neue Aufgabe</button></div>
     <div class="toolbar">
       <div class="grow"><span class="ico">${icon('search')}</span><input type="search" id="t-q" placeholder="Aufgaben oder Kunden suchen …"></div>
-      <select id="t-scope"><option value="mine">Mir zugewiesen</option><option value="created">Von mir delegiert</option><option value="all">Alle Mitarbeiter</option>${state.users.filter((u) => u.active && u.id !== state.me.id).map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
+      <select id="t-scope"><option value="mine">Meine (zuständig oder eingeladen)</option><option value="created">Von mir delegiert</option><option value="all">Alle Mitarbeiter</option>${state.users.filter((u) => u.active && u.id !== state.me.id).map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
       <select id="t-kind"><option value="">Alle Arten</option>${Object.entries(TASK_KINDS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
       <div class="btn-group"><button class="btn on" data-s="open">Offen</button><button class="btn" data-s="done">Erledigt</button></div>
     </div>

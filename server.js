@@ -185,8 +185,8 @@ app.post('/api/settings/testmail', auth, admin, wrap(async (req, res) => {
 }));
 
 // ---------- Kunden ----------
-const CUSTOMER_FIELDS = ['salutation', 'first_name', 'last_name', 'company', 'street', 'zip', 'city', 'customer_type', 'birthday', 'email', 'mobile', 'phone', 'visit_interval', 'owner_id'];
-const FIELD_LABEL = { salutation: 'Anrede', first_name: 'Vorname', last_name: 'Nachname', company: 'Firma', street: 'Straße', zip: 'PLZ', city: 'Ort', customer_type: 'Kundenart', birthday: 'Geburtsdatum', email: 'E-Mail', mobile: 'Handynummer', phone: 'Festnetznummer', visit_interval: 'Besuchsintervall', owner_id: 'Betreuer', info: 'Infofeld' };
+const CUSTOMER_FIELDS = ['salutation', 'first_name', 'last_name', 'company', 'street', 'zip', 'city', 'customer_type', 'birthday', 'email', 'mobile', 'phone', 'visit_interval', 'owner_id', 'is_buyer'];
+const FIELD_LABEL = { salutation: 'Anrede', first_name: 'Vorname', last_name: 'Nachname', company: 'Firma', street: 'Straße', zip: 'PLZ', city: 'Ort', customer_type: 'Kundenart', birthday: 'Geburtsdatum', email: 'E-Mail', mobile: 'Handynummer', phone: 'Festnetznummer', visit_interval: 'Besuchsintervall', owner_id: 'Betreuer', is_buyer: 'Kaufender Kunde', info: 'Infofeld' };
 
 function cleanCustomer(b) {
   const c = {
@@ -197,6 +197,7 @@ function cleanCustomer(b) {
     email: U.str(b.email, 200), mobile: U.str(b.mobile, 60), phone: U.str(b.phone, 60),
     visit_interval: U.INTERVAL_MONTHS[b.visit_interval] ? b.visit_interval : '',
     owner_id: b.owner_id && get('SELECT id FROM users WHERE id=?', b.owner_id) ? Number(b.owner_id) : null,
+    is_buyer: [true, 1, '1', 'true', 'on'].includes(b.is_buyer) ? 1 : 0,
   };
   if (!c.last_name) return { error: 'Nachname ist ein Pflichtfeld' };
   if (c.email && !/^\S+@\S+\.\S+$/.test(c.email)) return { error: 'E-Mail-Adresse ist ungültig' };
@@ -208,7 +209,18 @@ const CUSTOMER_LIST_SQL = `SELECT c.*, o.name owner_name,
   (SELECT MAX(happened_at) FROM entries e WHERE e.customer_id=c.id AND e.kind<>'system') last_contact
   FROM customers c LEFT JOIN users o ON o.id=c.owner_id`;
 
-function customerQuery(q) {
+// Letzter Kontakt: Reiter-Grenzen (exklusiv: bis 1 Monat, 1–3, 3–6, über 6 Monate / nie)
+function contactBounds() {
+  const t = U.today();
+  return { m1: U.addMonths(t, -1), m3: U.addMonths(t, -3), m6: U.addMonths(t, -6) };
+}
+const CONTACT_COND = {
+  m1: 'c.last_contact >= :m1',
+  m3: 'c.last_contact < :m1 AND c.last_contact >= :m3',
+  m6: 'c.last_contact < :m3 AND c.last_contact >= :m6',
+  old: '(c.last_contact IS NULL OR c.last_contact < :m6)',
+};
+function customerQuery(q, { withContact = true } = {}) {
   const where = []; const params = [];
   if (q.q) {
     for (const term of String(q.q).trim().split(/\s+/).slice(0, 5)) {
@@ -218,18 +230,46 @@ function customerQuery(q) {
       params.push(like, like, like, like, like, like, like, digits, digits, like);
     }
   }
-  if (U.CUSTOMER_TYPES.includes(q.type)) { where.push('c.customer_type=?'); params.push(q.type); }
+  if (q.type === 'none') where.push("(c.customer_type IS NULL OR c.customer_type='')");
+  else if (U.CUSTOMER_TYPES.includes(q.type)) { where.push('c.customer_type=?'); params.push(q.type); }
+  if (q.status === 'buyer') where.push('c.is_buyer=1');
+  if (q.status === 'lead') where.push('c.is_buyer=0');
   if (q.owner === 'me') { where.push('c.owner_id=?'); params.push(q.userId); }
-  if (q.interval) { where.push(q.interval === 'none' ? "c.visit_interval=''" : 'c.visit_interval=?'); if (q.interval !== 'none') params.push(q.interval); }
-  const sorts = { name: 'c.last_name COLLATE NOCASE, c.first_name COLLATE NOCASE', city: 'c.city COLLATE NOCASE, c.last_name', newest: 'c.created_at DESC', contact: 'last_contact IS NULL, last_contact DESC' };
-  return { sql: `${CUSTOMER_LIST_SQL} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY ${sorts[q.sort] || sorts.name}`, params };
+  else if (q.owner === 'none') where.push('c.owner_id IS NULL');
+  else if (/^\d+$/.test(q.owner || '')) { where.push('c.owner_id=?'); params.push(Number(q.owner)); }
+  if (q.interval) { where.push(q.interval === 'none' ? "c.visit_interval=''" : q.interval === 'any' ? "c.visit_interval<>''" : 'c.visit_interval=?'); if (!['none', 'any'].includes(q.interval)) params.push(q.interval); }
+  const t = U.today();
+  if (q.extra === 'open_tasks') where.push('c.open_tasks>0');
+  if (q.extra === 'no_tasks') where.push('c.open_tasks=0');
+  if (q.extra === 'visit_due') { where.push(`EXISTS (SELECT 1 FROM tasks vt WHERE vt.customer_id=c.id AND vt.kind='besuch' AND vt.status='open' AND vt.due_date<=?)`); params.push(t); }
+  if (q.extra === 'bday_month') { where.push(`c.birthday IS NOT NULL AND substr(c.birthday,6,2)=?`); params.push(t.slice(5, 7)); }
+  if (q.extra === 'no_phone') where.push(`IFNULL(c.mobile,'')='' AND IFNULL(c.phone,'')=''`);
+  if (q.extra === 'no_email') where.push(`IFNULL(c.email,'')=''`);
+  if (q.extra === 'new30') { where.push('c.created_at>=?'); params.push(U.addDays(t, -30)); }
+  if (withContact && CONTACT_COND[q.contact]) {
+    const b = contactBounds();
+    where.push(CONTACT_COND[q.contact].replace(/:m\d/g, (m) => `'${b[m.slice(1)]}'`));
+  }
+  const sorts = { name: 'c.last_name COLLATE NOCASE, c.first_name COLLATE NOCASE', city: 'c.city COLLATE NOCASE, c.last_name', newest: 'c.created_at DESC', contact: 'c.last_contact IS NULL, c.last_contact DESC', contact_old: 'c.last_contact IS NOT NULL, c.last_contact ASC', zip: 'c.zip, c.city COLLATE NOCASE, c.last_name' };
+  const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  return { sql: `SELECT * FROM (${CUSTOMER_LIST_SQL}) c ${whereSql} ORDER BY ${sorts[q.sort] || sorts.name}`, whereSql, params };
+}
+
+function contactCounts(q) {
+  const { whereSql, params } = customerQuery(q, { withContact: false });
+  const b = contactBounds();
+  const cond = (k) => CONTACT_COND[k].replace(/:m\d/g, (m) => `'${b[m.slice(1)]}'`);
+  return get(`SELECT COUNT(*) all_, ${Object.keys(CONTACT_COND).map((k) => `SUM(CASE WHEN ${cond(k)} THEN 1 ELSE 0 END) ${k}`).join(', ')},
+    SUM(CASE WHEN c.is_buyer=1 THEN 1 ELSE 0 END) buyers FROM (${CUSTOMER_LIST_SQL}) c ${whereSql}`, ...params);
 }
 
 app.get('/api/customers', auth, (req, res) => {
   const { sql, params } = customerQuery({ ...req.query, userId: req.user.id });
   const limit = Math.min(Number(req.query.limit) || 500, 5000);
   const rows = all(sql + ` LIMIT ${limit + 1}`, ...params);
-  res.json({ rows: rows.slice(0, limit), more: rows.length > limit, total: get('SELECT COUNT(*) n FROM customers').n });
+  const k = contactCounts({ ...req.query, userId: req.user.id });
+  res.json({ rows: rows.slice(0, limit), more: rows.length > limit, total: get('SELECT COUNT(*) n FROM customers').n,
+    counts: { all: k.all_ || 0, m1: k.m1 || 0, m3: k.m3 || 0, m6: k.m6 || 0, old: k.old || 0, buyers: k.buyers || 0 } });
 });
 
 app.get('/api/customers/export.xlsx', auth, (req, res) => {
@@ -261,7 +301,7 @@ app.get('/api/customers/:id', auth, (req, res) => {
   c.created_by_name = get('SELECT name FROM users WHERE id=?', c.created_by)?.name;
   c.updated_by_name = get('SELECT name FROM users WHERE id=?', c.updated_by)?.name;
   const entries = all(`SELECT e.*, u.name author FROM entries e LEFT JOIN users u ON u.id=e.created_by WHERE e.customer_id=? ORDER BY e.happened_at DESC, e.id DESC`, c.id);
-  const tasks = all(`SELECT t.*, a.name assignee, cb.name creator, db.name done_by_name FROM tasks t LEFT JOIN users a ON a.id=t.assigned_to LEFT JOIN users cb ON cb.id=t.created_by LEFT JOIN users db ON db.id=t.done_by
+  const tasks = all(`SELECT t.*, a.name assignee, cb.name creator, db.name done_by_name, ${PARTICIPANT_COLS} FROM tasks t LEFT JOIN users a ON a.id=t.assigned_to LEFT JOIN users cb ON cb.id=t.created_by LEFT JOIN users db ON db.id=t.done_by
     WHERE t.customer_id=? ORDER BY t.status='done', CASE WHEN t.status='open' THEN t.due_date END ASC, t.done_at DESC`, c.id);
   const files = all('SELECT f.id, f.filename, f.mime, f.size, f.created_at, u.name uploader FROM files f LEFT JOIN users u ON u.id=f.uploaded_by WHERE f.customer_id=? ORDER BY f.created_at DESC', c.id);
   const ids = all('SELECT id FROM customers ORDER BY last_name COLLATE NOCASE, first_name COLLATE NOCASE').map((r) => r.id);
@@ -311,6 +351,25 @@ app.post('/api/customers/bulk-delete', auth, admin, (req, res) => {
   res.json({ deleted: ids.length });
 });
 
+app.post('/api/customers/bulk-update', auth, (req, res) => {
+  const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter(Number.isInteger).slice(0, 5000);
+  const b = req.body || {};
+  const sets = []; const p = []; const label = [];
+  if (b.is_buyer !== undefined) { sets.push('is_buyer=?'); p.push(b.is_buyer ? 1 : 0); label.push(b.is_buyer ? 'als kaufender Kunde markiert' : 'als Interessent markiert'); }
+  if (b.customer_type !== undefined && (U.CUSTOMER_TYPES.includes(b.customer_type) || b.customer_type === '')) { sets.push('customer_type=?'); p.push(b.customer_type || null); label.push(`Kundenart: ${b.customer_type || '–'}`); }
+  if (b.owner_id !== undefined && get('SELECT id FROM users WHERE id=?', b.owner_id)) { sets.push('owner_id=?'); p.push(Number(b.owner_id)); label.push(`Betreuer: ${get('SELECT name FROM users WHERE id=?', b.owner_id).name}`); }
+  if (!sets.length || !ids.length) return bad(res, 'Nichts zu ändern');
+  tx(() => {
+    for (const id of ids) {
+      if (!get('SELECT id FROM customers WHERE id=?', id)) continue;
+      run(`UPDATE customers SET ${sets.join(',')}, updated_by=?, updated_at=datetime('now','localtime') WHERE id=?`, ...p, req.user.id, id);
+      if (b.owner_id !== undefined) run(`UPDATE tasks SET assigned_to=? WHERE customer_id=? AND auto_visit=1 AND status='open'`, Number(b.owner_id), id);
+      L.systemEntry(id, req.user.id, `Sammeländerung: ${label.join(', ')}`);
+    }
+  });
+  res.json({ updated: ids.length });
+});
+
 // ---------- Zeitleiste ----------
 function cleanTask(b, fallbackCustomerId) {
   const t = {
@@ -324,6 +383,9 @@ function cleanTask(b, fallbackCustomerId) {
     assigned_to: b.assigned_to && get('SELECT id FROM users WHERE id=? AND active=1', b.assigned_to) ? Number(b.assigned_to) : null,
     remind_day_before: b.remind_day_before === false || b.remind_day_before === 0 ? 0 : 1,
     customer_id: b.customer_id === undefined ? fallbackCustomerId ?? null : (b.customer_id ? Number(b.customer_id) : null),
+    participants: Array.isArray(b.participants)
+      ? [...new Set(b.participants.map(Number))].filter((id) => Number.isInteger(id) && get('SELECT id FROM users WHERE id=? AND active=1', id)).slice(0, 30)
+      : undefined,
   };
   if (t.customer_id && !get('SELECT id FROM customers WHERE id=?', t.customer_id)) return { error: 'Kunde nicht gefunden' };
   if (!t.title) t.title = U.TASK_KINDS[t.kind];
@@ -333,8 +395,22 @@ function cleanTask(b, fallbackCustomerId) {
 function insertTask(t, userId, entryId) {
   const r = run(`INSERT INTO tasks(customer_id, entry_id, kind, title, description, due_date, due_time, duration_min, location, assigned_to, created_by, remind_day_before)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, t.customer_id, entryId ?? null, t.kind, t.title, t.description, t.due_date, t.due_time, t.duration_min, t.location, t.assigned_to ?? userId, userId, t.remind_day_before);
-  return Number(r.lastInsertRowid);
+  const id = Number(r.lastInsertRowid);
+  setParticipants(id, t.participants || [], t.assigned_to ?? userId);
+  return id;
 }
+/** Setzt die weiteren Teilnehmer; gibt die neu hinzugekommenen zurück. */
+function setParticipants(taskId, ids, assignedTo) {
+  const before = all('SELECT user_id FROM task_participants WHERE task_id=?', taskId).map((r) => r.user_id);
+  const want = ids.filter((id) => id !== assignedTo);
+  run('DELETE FROM task_participants WHERE task_id=?', taskId);
+  for (const id of want) run('INSERT OR IGNORE INTO task_participants(task_id, user_id) VALUES(?,?)', taskId, id);
+  return want.filter((id) => !before.includes(id));
+}
+// Aufgabe betrifft einen Mitarbeiter (zuständig oder eingeladen) – braucht 2 Parameter
+const INVOLVES = '(t.assigned_to=? OR EXISTS (SELECT 1 FROM task_participants tp WHERE tp.task_id=t.id AND tp.user_id=?))';
+const PARTICIPANT_COLS = `(SELECT group_concat(pu.name, ', ') FROM task_participants tp JOIN users pu ON pu.id=tp.user_id WHERE tp.task_id=t.id) participant_names,
+  (SELECT group_concat(tp.user_id) FROM task_participants tp WHERE tp.task_id=t.id) participant_ids`;
 
 app.post('/api/customers/:id/entries', auth, wrap(async (req, res) => {
   const c = get('SELECT * FROM customers WHERE id=?', req.params.id);
@@ -356,7 +432,10 @@ app.post('/api/customers/:id/entries', auth, wrap(async (req, res) => {
     if (kind === 'besuch') L.syncVisitTask(c.id);
     return ids;
   });
-  for (const id of taskIds) await L.notifyAssignment(id, req.user.id);
+  for (const id of taskIds) {
+    await L.notifyAssignment(id, req.user.id);
+    await L.notifyParticipants(id, req.user.id, all('SELECT user_id FROM task_participants WHERE task_id=?', id).map((r) => r.user_id));
+  }
   res.json({ ok: true, taskIds });
 }));
 
@@ -383,7 +462,7 @@ app.delete('/api/entries/:id', auth, (req, res) => {
 });
 
 // ---------- Aufgaben ----------
-const TASK_SQL = `SELECT t.*, a.name assignee, a.color assignee_color, cb.name creator, db.name done_by_name,
+const TASK_SQL = `SELECT t.*, a.name assignee, a.color assignee_color, cb.name creator, db.name done_by_name, ${PARTICIPANT_COLS},
   (SELECT COUNT(*) FROM task_files tf WHERE tf.task_id=t.id) file_count,
   c.first_name c_first, c.last_name c_last, c.company c_company, c.city c_city, c.mobile c_mobile, c.phone c_phone, c.street c_street, c.zip c_zip
   FROM tasks t LEFT JOIN users a ON a.id=t.assigned_to LEFT JOIN users cb ON cb.id=t.created_by LEFT JOIN users db ON db.id=t.done_by LEFT JOIN customers c ON c.id=t.customer_id`;
@@ -391,9 +470,9 @@ const TASK_SQL = `SELECT t.*, a.name assignee, a.color assignee_color, cb.name c
 app.get('/api/tasks', auth, (req, res) => {
   const where = []; const p = [];
   const scope = req.query.scope || 'mine';
-  if (scope === 'mine') { where.push('t.assigned_to=?'); p.push(req.user.id); }
+  if (scope === 'mine') { where.push(INVOLVES); p.push(req.user.id, req.user.id); }
   else if (scope === 'created') { where.push('t.created_by=? AND t.assigned_to<>?'); p.push(req.user.id, req.user.id); }
-  else if (/^\d+$/.test(scope)) { where.push('t.assigned_to=?'); p.push(Number(scope)); }
+  else if (/^\d+$/.test(scope)) { where.push(INVOLVES); p.push(Number(scope), Number(scope)); }
   if (req.query.status === 'open' || req.query.status === 'done') { where.push('t.status=?'); p.push(req.query.status); }
   if (U.isDate(req.query.from)) { where.push('t.due_date>=?'); p.push(req.query.from); }
   if (U.isDate(req.query.to)) { where.push('t.due_date<=?'); p.push(req.query.to); }
@@ -415,6 +494,7 @@ app.post('/api/tasks', auth, wrap(async (req, res) => {
   const id = insertTask(t, req.user.id, null);
   if (t.customer_id) L.systemEntry(t.customer_id, req.user.id, `${U.TASK_KINDS[t.kind]} angelegt: ${t.title}`);
   await L.notifyAssignment(id, req.user.id);
+  await L.notifyParticipants(id, req.user.id, all('SELECT user_id FROM task_participants WHERE task_id=?', id).map((r) => r.user_id));
   res.json({ id });
 }));
 app.put('/api/tasks/:id', auth, wrap(async (req, res) => {
@@ -427,7 +507,12 @@ app.put('/api/tasks/:id', auth, wrap(async (req, res) => {
        reminder_sent=CASE WHEN ? THEN 0 ELSE reminder_sent END, auto_visit=CASE WHEN ? THEN 0 ELSE auto_visit END, updated_at=datetime('now','localtime') WHERE id=?`,
   t.customer_id, t.kind, t.title, t.description, t.due_date, t.due_time, t.duration_min, t.location, t.assigned_to ?? old.assigned_to, t.remind_day_before,
   resetReminder ? 1 : 0, (old.auto_visit && (resetReminder || old.title !== t.title)) ? 1 : 0, old.id);
-  if (t.assigned_to && t.assigned_to !== old.assigned_to) await L.notifyAssignment(old.id, req.user.id);
+  const added = t.participants ? setParticipants(old.id, t.participants, t.assigned_to ?? old.assigned_to) : [];
+  if (t.assigned_to && t.assigned_to !== old.assigned_to) {
+    run('DELETE FROM task_participants WHERE task_id=? AND user_id=?', old.id, t.assigned_to);
+    await L.notifyAssignment(old.id, req.user.id);
+  }
+  await L.notifyParticipants(old.id, req.user.id, added);
   res.json({ ok: true });
 }));
 app.post('/api/tasks/:id/done', auth, (req, res) => {
@@ -460,7 +545,8 @@ app.post('/api/tasks/:id/reopen', auth, (req, res) => {
 app.delete('/api/tasks/:id', auth, (req, res) => {
   const t = get('SELECT * FROM tasks WHERE id=?', req.params.id);
   if (!t) return res.status(404).json({ error: 'Aufgabe nicht gefunden' });
-  if (t.created_by && t.created_by !== req.user.id && t.assigned_to !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Keine Berechtigung' });
+  if (t.created_by && t.created_by !== req.user.id && t.assigned_to !== req.user.id && req.user.role !== 'admin'
+    && !get('SELECT 1 FROM task_participants WHERE task_id=? AND user_id=?', t.id, req.user.id)) return res.status(403).json({ error: 'Keine Berechtigung' });
   const tfiles = all('SELECT stored_name FROM task_files WHERE task_id=?', t.id);
   run('DELETE FROM tasks WHERE id=?', t.id);
   for (const f of tfiles) fs.rm(path.join(DATA_DIR, 'files', f.stored_name), () => {});
@@ -493,8 +579,9 @@ app.get('/api/dashboard', auth, (req, res) => {
   const d = U.parseDate(start); const dow = (d.getDay() + 6) % 7;
   const monday = U.addDays(start, -dow); const sunday = U.addDays(monday, 6);
   const scope = req.query.scope === 'all' ? 'all' : (/^\d+$/.test(req.query.scope || '') ? Number(req.query.scope) : 'mine');
-  const who = scope === 'all' ? '' : 'AND t.assigned_to=?';
-  const whoP = scope === 'all' ? [] : [scope === 'mine' ? req.user.id : scope];
+  const who = scope === 'all' ? '' : `AND ${INVOLVES}`;
+  const whoId = scope === 'mine' ? req.user.id : scope;
+  const whoP = scope === 'all' ? [] : [whoId, whoId];
   res.json({
     monday, sunday, today: U.today(),
     week: all(`${TASK_SQL} WHERE t.due_date BETWEEN ? AND ? ${who} ORDER BY t.due_date, t.due_time IS NOT NULL, t.due_time`, monday, sunday, ...whoP),
@@ -514,9 +601,9 @@ app.get('/api/dashboard', auth, (req, res) => {
 app.get('/api/calendar', auth, (req, res) => {
   if (!U.isDate(req.query.from) || !U.isDate(req.query.to)) return bad(res, 'Zeitraum fehlt');
   const scope = req.query.scope === 'all' ? 'all' : (/^\d+$/.test(req.query.scope || '') ? Number(req.query.scope) : req.user.id);
-  const who = scope === 'all' ? '' : 'AND t.assigned_to=?';
+  const who = scope === 'all' ? '' : `AND ${INVOLVES}`;
   res.json({
-    tasks: all(`${TASK_SQL} WHERE t.due_date BETWEEN ? AND ? ${who} ORDER BY t.due_date, t.due_time IS NOT NULL, t.due_time`, req.query.from, req.query.to, ...(scope === 'all' ? [] : [scope])),
+    tasks: all(`${TASK_SQL} WHERE t.due_date BETWEEN ? AND ? ${who} ORDER BY t.due_date, t.due_time IS NOT NULL, t.due_time`, req.query.from, req.query.to, ...(scope === 'all' ? [] : [scope, scope])),
     birthdays: birthdaysBetween(req.query.from, req.query.to),
   });
 });
@@ -567,8 +654,8 @@ app.post('/api/import/commit', auth, (req, res) => {
         const target = { ...old };
         const changed = importer.mergeInto(target, incoming);
         if (!changed.length) return;
-        run(`UPDATE customers SET ${importer.MERGE_FIELDS.map((f) => f + '=?').join(',')}, info=?, updated_by=?, updated_at=datetime('now','localtime') WHERE id=?`,
-          ...importer.MERGE_FIELDS.map((f) => target[f] ?? (f === 'visit_interval' ? '' : null)), target.info || '', req.user.id, old.id);
+        run(`UPDATE customers SET ${importer.MERGE_FIELDS.map((f) => f + '=?').join(',')}, info=?, is_buyer=?, updated_by=?, updated_at=datetime('now','localtime') WHERE id=?`,
+          ...importer.MERGE_FIELDS.map((f) => target[f] ?? (f === 'visit_interval' ? '' : null)), target.info || '', target.is_buyer ? 1 : 0, req.user.id, old.id);
         L.systemEntry(old.id, req.user.id, `Per Import ergänzt: ${changed.map((f) => FIELD_LABEL[f] || f).join(', ')}`);
         if (changed.includes('visit_interval')) L.syncVisitTask(old.id);
         updated++;

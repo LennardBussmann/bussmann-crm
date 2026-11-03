@@ -149,6 +149,54 @@ const U = require('../lib/util');
     assert.equal((await call('a', 'POST', '/api/customers/bulk-delete', { ids })).deleted, ids.length);
     await assert.rejects(call('k', 'POST', '/api/customers/bulk-delete', { ids: [id] }), /403/);
 
+    // Kaufender Kunde / Interessent, Filter, Kontakt-Reiter
+    const lead = (await call('a', 'POST', '/api/customers', { first_name: 'Ina', last_name: 'Interessent', city: 'Coesfeld', customer_type: 'Gartenbau' })).id;
+    const buyer = (await call('a', 'POST', '/api/customers', { first_name: 'Karl', last_name: 'Käufer', city: 'Coesfeld', customer_type: 'Landwirt', is_buyer: true })).id;
+    let cl = await call('a', 'GET', '/api/customers?q=Coesfeld&status=lead');
+    assert.deepEqual(cl.rows.map((r) => r.id), [lead]);
+    cl = await call('a', 'GET', '/api/customers?q=Coesfeld&status=buyer');
+    assert.deepEqual(cl.rows.map((r) => r.id), [buyer]);
+    assert.equal((await call('a', 'GET', '/api/customers?q=Coesfeld&type=Gartenbau')).rows.length, 1);
+    await call('a', 'PUT', `/api/customers/${lead}`, { is_buyer: true });
+    assert.equal((await call('a', 'GET', '/api/customers?q=Coesfeld&status=buyer')).rows.length, 2);
+    await call('k', 'POST', '/api/customers/bulk-update', { ids: [lead, buyer], is_buyer: false, customer_type: 'Forst' });
+    cl = await call('a', 'GET', '/api/customers?q=Coesfeld&status=lead&type=Forst');
+    assert.equal(cl.rows.length, 2);
+    // Kontakt: Karl vor 2 Monaten, Ina nie
+    await call('a', 'POST', `/api/customers/${buyer}/entries`, { kind: 'telefonat', text: 'Telefonat', happened_at: U.addMonths(U.today(), -2) + 'T10:00' });
+    cl = await call('a', 'GET', '/api/customers?q=Coesfeld&contact=m3');
+    assert.deepEqual(cl.rows.map((r) => r.id), [buyer]);
+    assert.equal(cl.counts.all, 2); assert.equal(cl.counts.m3, 1); assert.equal(cl.counts.old, 1); assert.equal(cl.counts.m1, 0);
+    assert.deepEqual((await call('a', 'GET', '/api/customers?q=Coesfeld&contact=old')).rows.map((r) => r.id), [lead]);
+    // Import mit Status-Spalte
+    const ws3 = XLSX.utils.aoa_to_sheet([['Vorname', 'Nachname', 'Ort', 'Kundenart', 'Status'], ['Gerd', 'Gärtner', 'Nottuln', 'GaLaBau', 'Kunde'], ['Lea', 'Leer', 'Nottuln', '', 'Interessent']]);
+    const wb3 = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb3, ws3, "K");
+    const pv3 = await call('a', 'POST', '/api/import/preview', XLSX.write(wb3, { type: 'buffer', bookType: 'xlsx' }), true);
+    assert.equal(pv3.rows[0].is_buyer, 1); assert.equal(pv3.rows[0].customer_type, 'Gartenbau'); assert.equal(pv3.rows[1].is_buyer, 0);
+
+    // Termin mit weiteren Teilnehmern
+    const third = await call('a', 'POST', '/api/users', { name: 'Tina Dritte', email: 'tina@test.de', password: 'geheim123' });
+    await call('t', 'POST', '/api/login', { email: 'tina@test.de', password: 'geheim123' });
+    const tid = (await call('a', 'POST', '/api/tasks', { kind: 'termin', title: 'Vorführung Mähwerk', due_date: U.addDays(U.today(), 3), due_time: '10:00', customer_id: buyer, participants: [kollege.id, third.id, me.user.id] })).id;
+    let tk = await call('a', 'GET', `/api/tasks/${tid}`);
+    assert.equal(tk.assigned_to, me.user.id);
+    assert.deepEqual(tk.participant_ids.split(',').map(Number).sort(), [kollege.id, third.id].sort(), 'Zuständiger darf nicht doppelt Teilnehmer sein');
+    assert.ok((await call('t', 'GET', '/api/notifications')).some((n) => n.text.includes('eingeladen') && n.text.includes('Vorführung')));
+    assert.ok((await call('t', 'GET', '/api/tasks?scope=mine&status=open')).some((t) => t.id === tid), 'Teilnehmer sieht Termin nicht');
+    const tcal = await call('t', 'GET', `/api/calendar?from=${U.today()}&to=${U.addDays(U.today(), 7)}`);
+    assert.ok(tcal.tasks.some((t) => t.id === tid));
+    const tdash = await call('t', 'GET', '/api/dashboard');
+    assert.ok(tdash.open.some((t) => t.id === tid));
+    const tFeed = await (await fetch(base + new URL((await call('t', 'GET', '/api/me/ical')).https).pathname)).text();
+    assert.ok(tFeed.includes('Vorführung Mähwerk'), 'Teilnehmer-Kalender fehlt Termin');
+    await call('a', 'PUT', `/api/tasks/${tid}`, { participants: [third.id] });
+    tk = await call('a', 'GET', `/api/tasks/${tid}`);
+    assert.equal(tk.participant_ids, String(third.id));
+    assert.ok(!(await call('k', 'GET', '/api/tasks?scope=mine&status=open')).some((t) => t.id === tid));
+    // Folgeaufgabe aus Zeitleiste mit Teilnehmer
+    const fu = await call('a', 'POST', `/api/customers/${buyer}/entries`, { kind: 'besuch', text: 'Besuch', tasks: [{ kind: 'besuch', title: 'Zweiter Besuch', due_date: U.addDays(U.today(), 9), assigned_to: kollege.id, participants: [third.id] }] });
+    assert.equal((await call('t', 'GET', `/api/tasks/${fu.taskIds[0]}`)).participant_names, 'Tina Dritte');
+
     // iCal
     const ical = await call('a', 'GET', '/api/me/ical');
     const feed = await (await fetch(base + new URL(ical.https).pathname)).text();
