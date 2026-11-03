@@ -10,6 +10,7 @@ const L = require('./lib/logic');
 const { sendMail, mailEnabled, appUrl } = require('./lib/mail');
 const { buildFeed } = require('./lib/ical');
 const importer = require('./lib/importer');
+const geo = require('./lib/geo');
 
 const PORT = Number(process.env.PORT || 3000);
 const SESSION_DAYS = 30;
@@ -185,8 +186,8 @@ app.post('/api/settings/testmail', auth, admin, wrap(async (req, res) => {
 }));
 
 // ---------- Kunden ----------
-const CUSTOMER_FIELDS = ['salutation', 'first_name', 'last_name', 'company', 'street', 'zip', 'city', 'customer_type', 'birthday', 'email', 'mobile', 'phone', 'visit_interval', 'owner_id', 'is_buyer'];
-const FIELD_LABEL = { salutation: 'Anrede', first_name: 'Vorname', last_name: 'Nachname', company: 'Firma', street: 'Straße', zip: 'PLZ', city: 'Ort', customer_type: 'Kundenart', birthday: 'Geburtsdatum', email: 'E-Mail', mobile: 'Handynummer', phone: 'Festnetznummer', visit_interval: 'Besuchsintervall', owner_id: 'Betreuer', is_buyer: 'Kaufender Kunde', info: 'Infofeld' };
+const CUSTOMER_FIELDS = ['salutation', 'first_name', 'last_name', 'company', 'street', 'zip', 'city', 'customer_type', 'birthday', 'email', 'mobile', 'phone', 'visit_interval', 'owner_id', 'is_buyer', 'tags'];
+const FIELD_LABEL = { salutation: 'Anrede', first_name: 'Vorname', last_name: 'Nachname', company: 'Firma', street: 'Straße', zip: 'PLZ', city: 'Ort', customer_type: 'Kundenart', birthday: 'Geburtsdatum', email: 'E-Mail', mobile: 'Handynummer', phone: 'Festnetznummer', visit_interval: 'Besuchsintervall', owner_id: 'Betreuer', is_buyer: 'Kaufender Kunde', tags: 'Schlagworte', info: 'Infofeld' };
 
 function cleanCustomer(b) {
   const c = {
@@ -198,6 +199,7 @@ function cleanCustomer(b) {
     visit_interval: U.INTERVAL_MONTHS[b.visit_interval] ? b.visit_interval : '',
     owner_id: b.owner_id && get('SELECT id FROM users WHERE id=?', b.owner_id) ? Number(b.owner_id) : null,
     is_buyer: [true, 1, '1', 'true', 'on'].includes(b.is_buyer) ? 1 : 0,
+    tags: U.tagsStore(U.tagsFrom(b.tags)),
   };
   if (!c.last_name) return { error: 'Nachname ist ein Pflichtfeld' };
   if (c.email && !/^\S+@\S+\.\S+$/.test(c.email)) return { error: 'E-Mail-Adresse ist ungültig' };
@@ -225,9 +227,10 @@ function customerQuery(q, { withContact = true } = {}) {
   if (q.q) {
     for (const term of String(q.q).trim().split(/\s+/).slice(0, 5)) {
       const like = `%${term}%`;
-      where.push(`(c.first_name LIKE ? OR c.last_name LIKE ? OR c.company LIKE ? OR c.city LIKE ? OR c.zip LIKE ? OR c.street LIKE ? OR c.email LIKE ? OR replace(c.mobile,' ','') LIKE ? OR replace(c.phone,' ','') LIKE ? OR c.info LIKE ?)`);
+      where.push(`(c.first_name LIKE ? OR c.last_name LIKE ? OR c.company LIKE ? OR c.city LIKE ? OR c.zip LIKE ? OR c.street LIKE ? OR c.email LIKE ? OR replace(c.mobile,' ','') LIKE ? OR replace(c.phone,' ','') LIKE ? OR c.info LIKE ? OR c.tags LIKE ?
+        OR EXISTS (SELECT 1 FROM machines mm WHERE mm.customer_id=c.id AND (mm.brand LIKE ? OR mm.model LIKE ? OR mm.serial LIKE ? OR mm.category LIKE ?)))`);
       const digits = `%${term.replace(/\s/g, '')}%`;
-      params.push(like, like, like, like, like, like, like, digits, digits, like);
+      params.push(like, like, like, like, like, like, like, digits, digits, like, like, like, like, like, like);
     }
   }
   if (q.type === 'none') where.push("(c.customer_type IS NULL OR c.customer_type='')");
@@ -239,6 +242,10 @@ function customerQuery(q, { withContact = true } = {}) {
   else if (/^\d+$/.test(q.owner || '')) { where.push('c.owner_id=?'); params.push(Number(q.owner)); }
   if (q.interval) { where.push(q.interval === 'none' ? "c.visit_interval=''" : q.interval === 'any' ? "c.visit_interval<>''" : 'c.visit_interval=?'); if (!['none', 'any'].includes(q.interval)) params.push(q.interval); }
   const t = U.today();
+  if (q.tag) { where.push(`c.tags LIKE ?`); params.push(`%|${String(q.tag).replace(/[%_|]/g, '')}|%`); }
+  if (q.extra === 'service_due') { where.push(`EXISTS (SELECT 1 FROM machines mm WHERE mm.customer_id=c.id AND mm.next_service IS NOT NULL AND mm.next_service<=?)`); params.push(U.addDays(t, 30)); }
+  if (q.extra === 'machines') where.push('EXISTS (SELECT 1 FROM machines mm WHERE mm.customer_id=c.id)');
+  if (q.extra === 'no_geo') where.push(`c.geo_status='fail'`);
   if (q.extra === 'open_tasks') where.push('c.open_tasks>0');
   if (q.extra === 'no_tasks') where.push('c.open_tasks=0');
   if (q.extra === 'visit_due') { where.push(`EXISTS (SELECT 1 FROM tasks vt WHERE vt.customer_id=c.id AND vt.kind='besuch' AND vt.status='open' AND vt.due_date<=?)`); params.push(t); }
@@ -304,9 +311,10 @@ app.get('/api/customers/:id', auth, (req, res) => {
   const tasks = all(`SELECT t.*, a.name assignee, cb.name creator, db.name done_by_name, ${PARTICIPANT_COLS} FROM tasks t LEFT JOIN users a ON a.id=t.assigned_to LEFT JOIN users cb ON cb.id=t.created_by LEFT JOIN users db ON db.id=t.done_by
     WHERE t.customer_id=? ORDER BY t.status='done', CASE WHEN t.status='open' THEN t.due_date END ASC, t.done_at DESC`, c.id);
   const files = all('SELECT f.id, f.filename, f.mime, f.size, f.created_at, u.name uploader FROM files f LEFT JOIN users u ON u.id=f.uploaded_by WHERE f.customer_id=? ORDER BY f.created_at DESC', c.id);
+  const machines = all(`SELECT m.*, u.name updated_by_name FROM machines m LEFT JOIN users u ON u.id=m.updated_by WHERE m.customer_id=? ORDER BY m.category COLLATE NOCASE, m.brand COLLATE NOCASE, m.id`, c.id);
   const ids = all('SELECT id FROM customers ORDER BY last_name COLLATE NOCASE, first_name COLLATE NOCASE').map((r) => r.id);
   const i = ids.indexOf(c.id);
-  res.json({ customer: c, entries, tasks, files, prev: ids[i - 1] || null, next: ids[i + 1] || null });
+  res.json({ customer: c, entries, tasks, files, machines, prev: ids[i - 1] || null, next: ids[i + 1] || null });
 });
 
 app.put('/api/customers/:id', auth, (req, res) => {
@@ -319,6 +327,7 @@ app.put('/api/customers/:id', auth, (req, res) => {
     run(`UPDATE customers SET ${CUSTOMER_FIELDS.map((f) => f + '=?').join(',')}, updated_by=?, updated_at=datetime('now','localtime') WHERE id=?`,
       ...CUSTOMER_FIELDS.map((f) => c[f] ?? (f === 'visit_interval' ? '' : null)), req.user.id, old.id);
     if (changed.length) L.systemEntry(old.id, req.user.id, `${changed.length === 1 ? 'Feld' : changed.length + ' Felder'} aktualisiert: ${changed.map((f) => FIELD_LABEL[f]).join(', ')}`);
+    if (['street', 'zip', 'city'].some((f) => changed.includes(f))) run(`UPDATE customers SET lat=NULL, lng=NULL, geo_status='' WHERE id=?`, old.id);
     if (changed.includes('visit_interval') || changed.includes('owner_id')) {
       if (changed.includes('owner_id')) run(`UPDATE tasks SET assigned_to=? WHERE customer_id=? AND auto_visit=1 AND status='open'`, c.owner_id, old.id);
       L.syncVisitTask(old.id);
@@ -358,16 +367,120 @@ app.post('/api/customers/bulk-update', auth, (req, res) => {
   if (b.is_buyer !== undefined) { sets.push('is_buyer=?'); p.push(b.is_buyer ? 1 : 0); label.push(b.is_buyer ? 'als kaufender Kunde markiert' : 'als Interessent markiert'); }
   if (b.customer_type !== undefined && (U.CUSTOMER_TYPES.includes(b.customer_type) || b.customer_type === '')) { sets.push('customer_type=?'); p.push(b.customer_type || null); label.push(`Kundenart: ${b.customer_type || '–'}`); }
   if (b.owner_id !== undefined && get('SELECT id FROM users WHERE id=?', b.owner_id)) { sets.push('owner_id=?'); p.push(Number(b.owner_id)); label.push(`Betreuer: ${get('SELECT name FROM users WHERE id=?', b.owner_id).name}`); }
-  if (!sets.length || !ids.length) return bad(res, 'Nichts zu ändern');
+  const addTag = U.tagsFrom(b.add_tag)[0]; const removeTag = U.tagsFrom(b.remove_tag)[0];
+  if (addTag) label.push(`Schlagwort „${addTag}“ hinzugefügt`);
+  if (removeTag) label.push(`Schlagwort „${removeTag}“ entfernt`);
+  if ((!sets.length && !addTag && !removeTag) || !ids.length) return bad(res, 'Nichts zu ändern');
   tx(() => {
     for (const id of ids) {
-      if (!get('SELECT id FROM customers WHERE id=?', id)) continue;
-      run(`UPDATE customers SET ${sets.join(',')}, updated_by=?, updated_at=datetime('now','localtime') WHERE id=?`, ...p, req.user.id, id);
+      const cur = get('SELECT id, tags FROM customers WHERE id=?', id);
+      if (!cur) continue;
+      let tags = U.tagsFrom(cur.tags);
+      if (addTag) tags = U.tagsFrom([...tags, addTag]);
+      if (removeTag) tags = tags.filter((x) => x.toLowerCase() !== removeTag.toLowerCase());
+      run(`UPDATE customers SET ${[...sets, 'tags=?'].join(',')}, updated_by=?, updated_at=datetime('now','localtime') WHERE id=?`, ...p, U.tagsStore(tags), req.user.id, id);
       if (b.owner_id !== undefined) run(`UPDATE tasks SET assigned_to=? WHERE customer_id=? AND auto_visit=1 AND status='open'`, Number(b.owner_id), id);
       L.systemEntry(id, req.user.id, `Sammeländerung: ${label.join(', ')}`);
     }
   });
   res.json({ updated: ids.length });
+});
+
+// ---------- Position (Karte) ----------
+app.put('/api/customers/:id/geo', auth, (req, res) => {
+  const c = get('SELECT id FROM customers WHERE id=?', req.params.id);
+  if (!c) return res.status(404).json({ error: 'Kunde nicht gefunden' });
+  const lat = Number(req.body?.lat); const lng = Number(req.body?.lng);
+  if (req.body?.reset) { run(`UPDATE customers SET lat=NULL, lng=NULL, geo_status='' WHERE id=?`, c.id); return res.json({ ok: true }); }
+  if (!(lat > -90 && lat < 90 && lng > -180 && lng < 180)) return bad(res, 'Ungültige Position');
+  run(`UPDATE customers SET lat=?, lng=?, geo_status='manual' WHERE id=?`, lat, lng, c.id);
+  L.systemEntry(c.id, req.user.id, 'Position auf der Karte korrigiert');
+  res.json({ ok: true });
+});
+app.get('/api/map', auth, (req, res) => {
+  const { sql, params } = customerQuery({ ...req.query, userId: req.user.id });
+  const rows = all(sql, ...params);
+  const pts = rows.filter((c) => c.lat != null && c.lng != null).slice(0, 10000).map((c) => ({
+    id: c.id, first_name: c.first_name, last_name: c.last_name, company: c.company, street: c.street, zip: c.zip, city: c.city,
+    lat: c.lat, lng: c.lng, geo: c.geo_status, is_buyer: c.is_buyer, customer_type: c.customer_type, last_contact: c.last_contact,
+    mobile: c.mobile, phone: c.phone, open_tasks: c.open_tasks, owner_name: c.owner_name, tags: c.tags,
+  }));
+  res.json({
+    points: pts, total: rows.length,
+    pending: rows.filter((c) => !c.geo_status && (c.city || c.zip)).length,
+    failed: rows.filter((c) => c.geo_status === 'fail').length,
+    noAddress: rows.filter((c) => !c.city && !c.zip).length,
+  });
+});
+app.get('/api/meta', auth, (req, res) => {
+  const counts = {};
+  for (const r of all(`SELECT tags FROM customers WHERE IFNULL(tags,'')<>''`)) for (const t of U.tagsFrom(r.tags)) counts[t] = (counts[t] || 0) + 1;
+  res.json({
+    tags: Object.entries(counts).sort((a, b) => a[0].localeCompare(b[0], 'de')).map(([tag, n]) => ({ tag, n })),
+    brands: all(`SELECT brand, COUNT(*) n FROM machines WHERE IFNULL(brand,'')<>'' GROUP BY brand COLLATE NOCASE ORDER BY n DESC LIMIT 50`).map((r) => r.brand),
+    categories: all(`SELECT category FROM machines WHERE IFNULL(category,'')<>'' GROUP BY category COLLATE NOCASE ORDER BY COUNT(*) DESC LIMIT 50`).map((r) => r.category),
+  });
+});
+
+// ---------- Maschinen ----------
+function cleanMachine(b) {
+  const year = Number(b.year);
+  const m = {
+    category: U.str(b.category, 60), brand: U.str(b.brand, 60), model: U.str(b.model, 100), serial: U.str(b.serial, 100),
+    year: Number.isInteger(year) && year > 1900 && year < 2200 ? year : null,
+    purchase_date: U.isDate(b.purchase_date) ? b.purchase_date : null,
+    sold_by_us: [true, 1, '1', 'true', 'on'].includes(b.sold_by_us) ? 1 : 0,
+    service_interval: U.INTERVAL_MONTHS[b.service_interval] ? b.service_interval : '',
+    last_service: U.isDate(b.last_service) ? b.last_service : null,
+    next_service: U.isDate(b.next_service) ? b.next_service : null,
+    notes: U.str(b.notes, 5000) || '',
+  };
+  if (!m.category && !m.brand && !m.model) return { error: 'Bitte mindestens Art, Marke oder Modell angeben' };
+  // Intervall gesetzt, aber kein Termin -> aus letzter Wartung/Kauf berechnen
+  if (!m.next_service && m.service_interval) {
+    const base = m.last_service || m.purchase_date;
+    if (base) { let d = U.addMonths(base, U.INTERVAL_MONTHS[m.service_interval]); while (d < U.today()) d = U.addMonths(d, U.INTERVAL_MONTHS[m.service_interval]); m.next_service = d; }
+  }
+  return { m };
+}
+const MACHINE_FIELDS = ['category', 'brand', 'model', 'serial', 'year', 'purchase_date', 'sold_by_us', 'service_interval', 'last_service', 'next_service', 'notes'];
+app.post('/api/customers/:id/machines', auth, (req, res) => {
+  const c = get('SELECT id FROM customers WHERE id=?', req.params.id);
+  if (!c) return res.status(404).json({ error: 'Kunde nicht gefunden' });
+  const { m, error } = cleanMachine(req.body || {});
+  if (error) return bad(res, error);
+  const id = tx(() => {
+    const r = run(`INSERT INTO machines(customer_id, ${MACHINE_FIELDS.join(',')}, created_by, updated_by) VALUES(?, ${MACHINE_FIELDS.map(() => '?').join(',')}, ?, ?)`,
+      c.id, ...MACHINE_FIELDS.map((f) => m[f]), req.user.id, req.user.id);
+    const id = Number(r.lastInsertRowid);
+    L.systemEntry(c.id, req.user.id, `Maschine hinzugefügt: ${L.machineName(m)}${m.serial ? ' (Nr. ' + m.serial + ')' : ''}`);
+    L.syncMachineTask(id);
+    return id;
+  });
+  res.json({ id });
+});
+app.put('/api/machines/:id', auth, (req, res) => {
+  const old = get('SELECT * FROM machines WHERE id=?', req.params.id);
+  if (!old) return res.status(404).json({ error: 'Maschine nicht gefunden' });
+  const { m, error } = cleanMachine({ ...old, ...req.body });
+  if (error) return bad(res, error);
+  tx(() => {
+    run(`UPDATE machines SET ${MACHINE_FIELDS.map((f) => f + '=?').join(',')}, updated_by=?, updated_at=datetime('now','localtime') WHERE id=?`, ...MACHINE_FIELDS.map((f) => m[f]), req.user.id, old.id);
+    L.systemEntry(old.customer_id, req.user.id, `Maschine geändert: ${L.machineName(m)}`);
+    L.syncMachineTask(old.id);
+  });
+  res.json({ ok: true });
+});
+app.delete('/api/machines/:id', auth, (req, res) => {
+  const old = get('SELECT * FROM machines WHERE id=?', req.params.id);
+  if (!old) return res.status(404).json({ error: 'Maschine nicht gefunden' });
+  tx(() => {
+    run(`DELETE FROM tasks WHERE machine_id=? AND status='open'`, old.id);
+    run('UPDATE tasks SET machine_id=NULL WHERE machine_id=?', old.id);
+    run('DELETE FROM machines WHERE id=?', old.id);
+    L.systemEntry(old.customer_id, req.user.id, `Maschine entfernt: ${L.machineName(old)}`);
+  });
+  res.json({ ok: true });
 });
 
 // ---------- Zeitleiste ----------
@@ -507,6 +620,7 @@ app.put('/api/tasks/:id', auth, wrap(async (req, res) => {
        reminder_sent=CASE WHEN ? THEN 0 ELSE reminder_sent END, auto_visit=CASE WHEN ? THEN 0 ELSE auto_visit END, updated_at=datetime('now','localtime') WHERE id=?`,
   t.customer_id, t.kind, t.title, t.description, t.due_date, t.due_time, t.duration_min, t.location, t.assigned_to ?? old.assigned_to, t.remind_day_before,
   resetReminder ? 1 : 0, (old.auto_visit && (resetReminder || old.title !== t.title)) ? 1 : 0, old.id);
+  if (old.machine_id && old.status === 'open' && old.due_date !== t.due_date) run(`UPDATE machines SET next_service=? WHERE id=?`, t.due_date, old.machine_id);
   const added = t.participants ? setParticipants(old.id, t.participants, t.assigned_to ?? old.assigned_to) : [];
   if (t.assigned_to && t.assigned_to !== old.assigned_to) {
     run('DELETE FROM task_participants WHERE task_id=? AND user_id=?', old.id, t.assigned_to);
@@ -523,7 +637,7 @@ app.post('/api/tasks/:id/done', auth, (req, res) => {
   tx(() => {
     run(`UPDATE tasks SET status='done', done_at=?, done_by=?, done_note=?, updated_at=datetime('now','localtime') WHERE id=?`, U.nowLocal(), req.user.id, note, t.id);
     if (t.customer_id) {
-      const kindMap = { besuch: 'besuch', anruf: 'telefonat', termin: 'termin' };
+      const kindMap = { besuch: 'besuch', anruf: 'telefonat', termin: 'termin', wartung: 'sonstiges' };
       if (note || kindMap[t.kind]) {
         run('INSERT INTO entries(customer_id, kind, happened_at, text, created_by) VALUES(?,?,?,?,?)', t.customer_id, kindMap[t.kind] || 'notiz', U.nowLocal(),
           `${U.TASK_KINDS[t.kind]} erledigt: ${t.title}${note ? '\n\n' + note : ''}`, req.user.id);
@@ -532,6 +646,7 @@ app.post('/api/tasks/:id/done', auth, (req, res) => {
       }
       L.syncVisitTask(t.customer_id);
     }
+    if (t.machine_id) L.machineServiced(t.machine_id, U.today());
   });
   if (t.created_by && t.created_by !== req.user.id) L.notify(t.created_by, `${req.user.name} hat „${t.title}“ erledigt`, t.id, t.customer_id);
   res.json({ ok: true });
@@ -550,6 +665,7 @@ app.delete('/api/tasks/:id', auth, (req, res) => {
   const tfiles = all('SELECT stored_name FROM task_files WHERE task_id=?', t.id);
   run('DELETE FROM tasks WHERE id=?', t.id);
   for (const f of tfiles) fs.rm(path.join(DATA_DIR, 'files', f.stored_name), () => {});
+  if (t.machine_id && t.status === 'open') run('UPDATE machines SET next_service=NULL WHERE id=?', t.machine_id);
   if (t.auto_visit && t.customer_id) {
     // Automatische Besuchsaufgabe gelöscht -> Intervall bleibt, nächste wird neu berechnet
     L.syncVisitTask(t.customer_id);
@@ -654,9 +770,10 @@ app.post('/api/import/commit', auth, (req, res) => {
         const target = { ...old };
         const changed = importer.mergeInto(target, incoming);
         if (!changed.length) return;
-        run(`UPDATE customers SET ${importer.MERGE_FIELDS.map((f) => f + '=?').join(',')}, info=?, is_buyer=?, updated_by=?, updated_at=datetime('now','localtime') WHERE id=?`,
-          ...importer.MERGE_FIELDS.map((f) => target[f] ?? (f === 'visit_interval' ? '' : null)), target.info || '', target.is_buyer ? 1 : 0, req.user.id, old.id);
+        run(`UPDATE customers SET ${importer.MERGE_FIELDS.map((f) => f + '=?').join(',')}, info=?, is_buyer=?, tags=?, updated_by=?, updated_at=datetime('now','localtime') WHERE id=?`,
+          ...importer.MERGE_FIELDS.map((f) => target[f] ?? (f === 'visit_interval' ? '' : null)), target.info || '', target.is_buyer ? 1 : 0, U.tagsStore(U.tagsFrom(target.tags)), req.user.id, old.id);
         L.systemEntry(old.id, req.user.id, `Per Import ergänzt: ${changed.map((f) => FIELD_LABEL[f] || f).join(', ')}`);
+        if (['street', 'zip', 'city'].some((f) => changed.includes(f))) run(`UPDATE customers SET lat=NULL, lng=NULL, geo_status='' WHERE id=?`, old.id);
         if (changed.includes('visit_interval')) L.syncVisitTask(old.id);
         updated++;
         return;
@@ -770,6 +887,7 @@ if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Bussmann CRM läuft auf http://localhost:${PORT}`);
     L.startScheduler();
+    geo.startGeocoder();
   });
 }
 module.exports = app;

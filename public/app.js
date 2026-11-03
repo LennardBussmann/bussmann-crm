@@ -33,7 +33,23 @@ const fmtSize = (b) => (b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.ma
 
 const TYPES = ['Landwirt', 'Gartenbau', 'Forst', 'Kommune', 'Gewerbe', 'Privat'];
 const INTERVALS = { '': 'Kein Intervall', monthly: 'Monatlich', quarterly: 'Vierteljährlich', halfyearly: 'Halbjährlich', yearly: 'Jährlich' };
-const TASK_KINDS = { anruf: 'Anruf', termin: 'Termin', besuch: 'Besuch', angebot: 'Angebot', aufgabe: 'Aufgabe' };
+const TASK_KINDS = { anruf: 'Anruf', termin: 'Termin', besuch: 'Besuch', angebot: 'Angebot', wartung: 'Wartung', aufgabe: 'Aufgabe' };
+const MACHINE_CATS = ['Traktor', 'Rasentraktor', 'Aufsitzmäher', 'Rasenmäher', 'Mähroboter', 'Motorsäge', 'Freischneider', 'Heckenschere', 'Laubbläser', 'Kehrmaschine', 'Kommunaltraktor', 'Mähwerk', 'Mulcher', 'Anhänger', 'Holzspalter', 'Sonstiges'];
+const tagList = (s) => String(s || '').split('|').filter(Boolean);
+const tagChips = (s, cls = '') => tagList(s).map((t) => `<span class="chip tagchip ${cls}">${icon('tag')} ${esc(t)}</span>`).join(' ');
+async function loadMeta() { try { state.meta = await api('/meta'); } catch { state.meta = state.meta || { tags: [], brands: [], categories: [] }; } return state.meta; }
+let leafletP = null;
+function loadLeaflet() {
+  if (window.L && window.L.map) return Promise.resolve(window.L);
+  return leafletP ||= new Promise((resolve, reject) => {
+    const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'vendor/leaflet/leaflet.css'; document.head.append(l);
+    const s = document.createElement('script'); s.src = 'vendor/leaflet/leaflet.js';
+    s.onload = () => resolve(window.L); s.onerror = () => { leafletP = null; reject(new Error('Karte konnte nicht geladen werden')); };
+    document.head.append(s);
+  });
+}
+const OSM = ['https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' }];
+const HOME_VIEW = [[51.92, 7.25], 10]; // Münsterland
 const ENTRY_KINDS = { besuch: 'Besuch', telefonat: 'Telefonat', email: 'E-Mail', termin: 'Termin', notiz: 'Notiz', sonstiges: 'Sonstiges' };
 
 // Icons (Linien-Icons, 24er Raster)
@@ -51,6 +67,8 @@ const ICONS = {
   mail: '<rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="m3 6.5 9 6.5 9-6.5"/>',
   phone: '<path d="M21 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 1.1 4.2 2 2 0 0 1 3.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L7 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/>',
   mobile: '<rect x="6.5" y="2.5" width="11" height="19" rx="2"/><path d="M11 18.5h2"/>',
+  tool: '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/>',
+  map: '<path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/>',
   pin: '<path d="M12 21s-7-6.2-7-11.5a7 7 0 1 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
   cake: '<path d="M4 21v-8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8"/><path d="M4 16c2 0 2 1.5 4 1.5S10 16 12 16s2 1.5 4 1.5 2-1.5 4-1.5"/><path d="M2 21h20M12 11V7"/><path d="M12 7c-1 0-1.5-.8-1.5-1.6S12 3 12 3s1.5 1.6 1.5 2.4S13 7 12 7z"/>',
   tag: '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
@@ -73,7 +91,7 @@ const ICONS = {
 };
 const icon = (n, cls = '') => `<svg class="ico ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ICONS.dot}</svg>`;
 const ENTRY_ICON = { besuch: 'car', telefonat: 'phone', email: 'mail', termin: 'cal', notiz: 'note', sonstiges: 'dot', system: 'info' };
-const TASK_ICON = { anruf: 'phone', termin: 'cal', besuch: 'car', angebot: 'offer', aufgabe: 'tasks' };
+const TASK_ICON = { anruf: 'phone', termin: 'cal', besuch: 'car', angebot: 'offer', wartung: 'tool', aufgabe: 'tasks' };
 
 async function api(path, opts = {}) {
   const o = { method: opts.method || 'GET', headers: { 'X-Requested-With': 'crm' }, credentials: 'same-origin' };
@@ -205,7 +223,7 @@ function route() {
   const main = $('#main');
   main.innerHTML = '<div class="empty">Lädt …</div>';
   window.scrollTo(0, 0);
-  const views = { '': viewDashboard, start: viewDashboard, kunden: p1 ? () => viewCustomer(Number(p1)) : viewCustomers, aufgaben: viewTasks, kalender: viewCalendar, einstellungen: viewSettings };
+  const views = { '': viewDashboard, start: viewDashboard, kunden: p1 ? () => viewCustomer(Number(p1)) : viewCustomers, aufgaben: viewTasks, kalender: viewCalendar, karte: viewMap, einstellungen: viewSettings };
   (views[p0] || viewDashboard)(main).catch(fail);
   if (p0 === 'aufgaben' && p1) openTask(Number(p1));
 }
@@ -265,7 +283,7 @@ function renderSetup() {
 
 // ======================= Grundgerüst =======================
 function renderShell() {
-  const nav = [['start', 'home', 'Übersicht'], ['kunden', 'users', 'Kunden'], ['aufgaben', 'tasks', 'Aufgaben'], ['kalender', 'cal', 'Kalender'], ['einstellungen', 'gear', 'Einstellungen']];
+  const nav = [['start', 'home', 'Übersicht'], ['kunden', 'users', 'Kunden'], ['karte', 'map', 'Karte'], ['aufgaben', 'tasks', 'Aufgaben'], ['kalender', 'cal', 'Kalender'], ['einstellungen', 'gear', 'Einstellungen']];
   $('#app').innerHTML = `<div class="shell">
     <header class="topbar">
       <a class="brand" href="#/"><img src="img/logo.png" alt="Bussmann Land- & Gartentechnik"></a>
@@ -592,7 +610,7 @@ const CONTACT_TABS = [
   ['m6', 'vor 3–6 Monaten', 'm6'],
   ['old', 'länger als 6 Monate / nie', 'old'],
 ];
-const CUST_DEFAULTS = { q: '', type: '', status: '', sort: 'name', owner: '', interval: '', extra: '', contact: '' };
+const CUST_DEFAULTS = { q: '', type: '', status: '', sort: 'name', owner: '', interval: '', extra: '', contact: '', tag: '' };
 async function viewCustomers(main) {
   let saved = {};
   try { saved = JSON.parse(sessionStorage.getItem('custFilter') || '{}'); } catch { /* egal */ }
@@ -600,6 +618,7 @@ async function viewCustomers(main) {
   if (sessionStorage.getItem('custQ')) { st.q = sessionStorage.getItem('custQ'); sessionStorage.removeItem('custQ'); }
   const save = () => { try { sessionStorage.setItem('custFilter', JSON.stringify(st)); } catch { /* egal */ } };
   const others = state.users.filter((u) => u.active && u.id !== state.me.id);
+  const meta = await loadMeta();
   main.innerHTML = `
     <div class="page-head"><h1>Kunden</h1>
       <button class="btn" id="c-import">${icon('upload')} Excel-Import</button>
@@ -615,17 +634,18 @@ async function viewCustomers(main) {
       <select id="c-type" title="Kundenart"><option value="">Alle Kundenarten</option>${TYPES.map((t) => `<option>${t}</option>`).join('')}<option value="none">ohne Kundenart</option></select>
       <select id="c-owner" title="Betreuer"><option value="">Alle Betreuer</option><option value="me">Meine Kunden</option>${others.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}<option value="none">ohne Betreuer</option></select>
       <select id="c-interval" title="Besuchsintervall"><option value="">Alle Intervalle</option><option value="any">mit Besuchsintervall</option>${Object.entries(INTERVALS).filter(([k]) => k).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}<option value="none">ohne Intervall</option></select>
-      <select id="c-extra" title="Weitere Filter"><option value="">Weitere Filter …</option><option value="visit_due">Besuch fällig / überfällig</option><option value="open_tasks">mit offenen Aufgaben</option><option value="no_tasks">ohne offene Aufgaben</option><option value="bday_month">Geburtstag diesen Monat</option><option value="new30">in den letzten 30 Tagen angelegt</option><option value="no_phone">ohne Telefonnummer</option><option value="no_email">ohne E-Mail</option></select>
+      <select id="c-tag" title="Schlagwort"><option value="">Alle Schlagworte</option>${meta.tags.map((t) => `<option value="${esc(t.tag)}">${esc(t.tag)} (${t.n})</option>`).join('')}</select>
+      <select id="c-extra" title="Weitere Filter"><option value="">Weitere Filter …</option><option value="visit_due">Besuch fällig / überfällig</option><option value="service_due">Wartung fällig (nächste 30 Tage)</option><option value="machines">mit erfassten Maschinen</option><option value="open_tasks">mit offenen Aufgaben</option><option value="no_tasks">ohne offene Aufgaben</option><option value="bday_month">Geburtstag diesen Monat</option><option value="new30">in den letzten 30 Tagen angelegt</option><option value="no_phone">ohne Telefonnummer</option><option value="no_email">ohne E-Mail</option><option value="no_geo">Adresse auf Karte nicht gefunden</option></select>
       <button class="btn ghost sm hidden" id="c-reset">${icon('x')} Filter zurücksetzen</button>
     </div>
     <div class="card"><div class="table-wrap" id="c-table"></div></div>`;
   const syncControls = () => {
-    $('#c-sort').value = st.sort; $('#c-type').value = st.type; $('#c-owner').value = st.owner; $('#c-interval').value = st.interval; $('#c-extra').value = st.extra;
+    $('#c-sort').value = st.sort; $('#c-type').value = st.type; $('#c-tag').value = st.tag; $('#c-owner').value = st.owner; $('#c-interval').value = st.interval; $('#c-extra').value = st.extra;
     $$('#c-status button').forEach((b) => b.classList.toggle('on', b.dataset.s === st.status));
     $$('#c-contact button').forEach((b) => b.classList.toggle('on', b.dataset.c === st.contact));
-    const active = ['type', 'status', 'owner', 'interval', 'extra', 'q'].some((k) => st[k]);
+    const active = ['type', 'status', 'owner', 'interval', 'extra', 'tag', 'q'].some((k) => st[k]);
     $('#c-reset').classList.toggle('hidden', !active);
-    ['c-type', 'c-owner', 'c-interval', 'c-extra'].forEach((id) => $('#' + id).classList.toggle('active', !!$('#' + id).value));
+    ['c-type', 'c-owner', 'c-interval', 'c-extra', 'c-tag'].forEach((id) => $('#' + id).classList.toggle('active', !!$('#' + id).value));
   };
   const load = async () => {
     save(); syncControls();
@@ -637,11 +657,12 @@ async function viewCustomers(main) {
         <button class="btn sm" data-bulk="lead">Als Interessent</button>
         <select id="c-bulk-type" class="sm" style="width:auto"><option value="">Kundenart setzen …</option>${TYPES.map((t) => `<option>${t}</option>`).join('')}</select>
         <select id="c-bulk-owner" class="sm" style="width:auto"><option value="">Betreuer setzen …</option>${userOptions(null)}</select>
+        <button class="btn sm" id="c-bulk-tag">${icon('tag')} Schlagwort …</button>
         ${adm ? `<button class="btn danger sm" id="c-bulk-del">${icon('trash')} Löschen</button>` : ''}</div>
       <div class="legend"><span class="sw lead"></span> grün = Interessent (noch kein kaufender Kunde) · <span>${data.counts?.buyers ?? 0} kaufende Kunden, ${(data.counts?.all ?? 0) - (data.counts?.buyers ?? 0)} Interessenten in dieser Auswahl</span></div>
       <table class="list"><thead><tr><th style="width:36px"><input type="checkbox" id="c-all" title="Alle auswählen"></th><th>Name</th><th>Ort</th><th class="hide-m">Kundenart</th><th class="hide-m">E-Mail</th><th>Telefon</th><th class="hide-m">Betreuer</th><th class="hide-m">Letzter Kontakt</th></tr></thead><tbody>
       ${data.rows.map((c) => `<tr data-id="${c.id}" class="${c.is_buyer ? '' : 'lead'}"><td onclick="event.stopPropagation()"><input type="checkbox" class="c-sel" value="${c.id}"></td>
-        <td class="name">${esc(custName(c))}${c.is_buyer ? '' : ' <span class="chip lead">Interessent</span>'}${c.company && c.company !== c.last_name ? `<div class="muted small" style="font-weight:400">${esc(c.company)}</div>` : ''}</td>
+        <td class="name">${esc(custName(c))}${c.is_buyer ? '' : ' <span class="chip lead">Interessent</span>'}${c.company && c.company !== c.last_name ? `<div class="muted small" style="font-weight:400">${esc(c.company)}</div>` : ''}${c.tags ? `<div class="tagrow">${tagChips(c.tags, 'xs')}</div>` : ''}</td>
         <td>${esc([c.zip, c.city].filter(Boolean).join(' '))}</td>
         <td class="hide-m">${c.customer_type ? `<span class="chip t-${c.customer_type}">${c.customer_type}</span>` : ''}</td>
         <td class="hide-m">${c.email ? `<a href="mailto:${esc(c.email)}" onclick="event.stopPropagation()">${esc(c.email)}</a>` : ''}</td>
@@ -661,6 +682,16 @@ async function viewCustomers(main) {
       $$('[data-bulk]').forEach((b) => b.onclick = () => bulk({ is_buyer: b.dataset.bulk === 'buyer' }, b.dataset.bulk === 'buyer' ? 'als kaufende Kunden markiert' : 'als Interessenten markiert'));
       $('#c-bulk-type').onchange = (e) => e.target.value && bulk({ customer_type: e.target.value }, `auf „${e.target.value}“ gesetzt`);
       $('#c-bulk-owner').onchange = (e) => e.target.value && bulk({ owner_id: Number(e.target.value) }, 'neuem Betreuer zugeordnet');
+      $('#c-bulk-tag').onclick = () => {
+        const m = modal({
+          title: `Schlagwort für ${sel().length} Kunden`,
+          body: `<div class="field"><label>Schlagwort</label><input type="text" id="bt-tag" list="bt-list" placeholder="z. B. Messe 2026"><datalist id="bt-list">${meta.tags.map((t) => `<option value="${esc(t.tag)}">`).join('')}</datalist></div>`,
+          foot: `<span class="left"><button class="btn" id="bt-rm">Entfernen</button></span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="bt-add">Hinzufügen</button>`,
+        });
+        const go = (k) => { const v = $('#bt-tag', m.el).value.trim(); if (!v) return $('#bt-tag', m.el).focus(); m.close(); bulk({ [k]: v }, k === 'add_tag' ? `mit „${v}“ markiert` : `– „${v}“ entfernt`).then(loadMeta); };
+        $('#bt-add', m.el).onclick = () => go('add_tag'); $('#bt-rm', m.el).onclick = () => go('remove_tag');
+        $('#bt-tag', m.el).focus();
+      };
       if (adm) $('#c-bulk-del').onclick = async () => {
         const ids = sel();
         if (!(await confirmBox(`<b>${ids.length} Kunden</b> mit allen Einträgen, Aufgaben und Dateien endgültig löschen?`))) return;
@@ -670,7 +701,7 @@ async function viewCustomers(main) {
   };
   $('#c-q').oninput = debounce((e) => { st.q = e.target.value; load(); }, 200);
   $('#c-sort').onchange = (e) => { st.sort = e.target.value; load(); };
-  [['c-type', 'type'], ['c-owner', 'owner'], ['c-interval', 'interval'], ['c-extra', 'extra']].forEach(([id, k]) => { $('#' + id).onchange = (e) => { st[k] = e.target.value; load(); }; });
+  [['c-type', 'type'], ['c-owner', 'owner'], ['c-interval', 'interval'], ['c-extra', 'extra'], ['c-tag', 'tag']].forEach(([id, k]) => { $('#' + id).onchange = (e) => { st[k] = e.target.value; load(); }; });
   $$('#c-status button').forEach((b) => b.onclick = () => { st.status = b.dataset.s; load(); });
   $$('#c-contact button').forEach((b) => b.onclick = () => {
     st.contact = b.dataset.c;
@@ -713,11 +744,21 @@ function openCustomerForm(c = {}, onSaved) {
       <div class="field"><label>Festnetznummer</label><input type="tel" name="phone" value="${esc(c.phone || '')}"></div>
       <div class="field"><label>Besuchsintervall</label><select name="visit_interval">${Object.entries(INTERVALS).map(([k, v]) => `<option value="${k}" ${(c.visit_interval || '') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
       <div class="field"><label>Betreuer (Hauptzuständiger)</label><select name="owner_id">${userOptions(c.owner_id || state.me.id)}</select></div>
+      <div class="field full"><label>Schlagworte <span class="muted">(mit Komma trennen)</span></label><input type="text" name="tags" id="cf-tags" value="${esc(tagList(c.tags).join(', '))}" placeholder="z. B. Messe 2026, Interesse Mähroboter" autocomplete="off"><div class="tag-suggest" id="cf-tag-sug"></div></div>
       <div class="field full"><label class="check buyer-check"><input type="checkbox" name="is_buyer" ${c.is_buyer ? 'checked' : ''}> <b>Kaufender Kunde</b> <span class="muted">– hat bereits bei uns gekauft (ohne Haken = Interessent, in der Liste grün)</span></label></div>
       ${isEdit ? '' : '<div class="field full"><label>Infofeld (wichtige Infos, stehen immer oben)</label><textarea name="info" rows="3"></textarea></div>'}
       <div class="full callout info small">${icon('repeat')} Mit Besuchsintervall legt das CRM automatisch eine Besuchsaufgabe an (fällig: letzter Besuch + Intervall) und erinnert einen Tag vorher.</div>
     </div></form>`,
     foot: `<span class="left">${isEdit && state.me.role === 'admin' ? `<button class="btn danger" id="cf-del">${icon('trash')} Kunde löschen</button>` : ''}</span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="cf-save">Speichern</button>`,
+  });
+  (state.meta ? Promise.resolve(state.meta) : loadMeta()).then((meta) => {
+    const box = $('#cf-tag-sug', m.el); const inp = $('#cf-tags', m.el);
+    const draw = () => {
+      const have = inp.value.split(',').map((x) => x.trim().toLowerCase());
+      box.innerHTML = meta.tags.filter((t) => !have.includes(t.tag.toLowerCase())).slice(0, 15).map((t) => `<button type="button" class="chip tagchip" data-t="${esc(t.tag)}">+ ${esc(t.tag)}</button>`).join('');
+      $$('[data-t]', box).forEach((b) => b.onclick = () => { inp.value = [...inp.value.split(',').map((x) => x.trim()).filter(Boolean), b.dataset.t].join(', '); draw(); });
+    };
+    inp.oninput = draw; draw();
   });
   $('#cf-save', m.el).onclick = async () => {
     const f = $('#cf', m.el);
@@ -727,7 +768,7 @@ function openCustomerForm(c = {}, onSaved) {
       let id = c.id;
       if (isEdit) await api('/customers/' + c.id, { method: 'PUT', body });
       else id = (await api('/customers', { method: 'POST', body })).id;
-      m.close(); toast(isEdit ? 'Kunde gespeichert' : 'Kunde angelegt');
+      m.close(); toast(isEdit ? 'Kunde gespeichert' : 'Kunde angelegt'); loadMeta();
       onSaved && onSaved(id);
     } catch (e) { fail(e); }
   };
@@ -813,7 +854,7 @@ async function viewCustomer(id, tab) {
       <span class="avatar lg" style="background:var(--red)">${esc(initials(custName(c)))}</span>
       <div class="title">
         <h1>${esc([c.salutation && c.salutation !== 'Firma' ? c.salutation : '', c.first_name, c.last_name].filter(Boolean).join(' '))} ${c.customer_type ? `<span class="chip t-${c.customer_type}">${c.customer_type}</span>` : ''}
-          <button class="chip ${c.is_buyer ? 'ok' : 'lead'} chip-btn" id="cu-buyer" title="Klicken zum Umschalten">${c.is_buyer ? `${icon('check')} Kaufender Kunde` : 'Interessent'}</button></h1>
+          <button class="chip ${c.is_buyer ? 'ok' : 'lead'} chip-btn" id="cu-buyer" title="Klicken zum Umschalten">${c.is_buyer ? `${icon('check')} Kaufender Kunde` : 'Interessent'}</button> ${tagChips(c.tags)}</h1>
         <div class="muted">${esc([c.company, c.city].filter(Boolean).join(' · '))}${openTasks.length ? ` · <span style="color:var(--red);font-weight:700">${openTasks.length} offene Aufgabe${openTasks.length > 1 ? 'n' : ''}</span>` : ''}</div>
       </div>
       ${c.email ? `<a class="btn" href="mailto:${esc(c.email)}">${icon('mail')}<span class="hide-m">E-Mail</span></a>` : ''}
@@ -841,6 +882,8 @@ async function viewCustomer(id, tab) {
           <li>${icon('repeat')}<div><span class="k">Besuchsintervall</span>${c.visit_interval ? INTERVALS[c.visit_interval] : 'keins'}</div></li>
           <li>${icon('user')}<div><span class="k">Betreuer (Hauptzuständiger)</span>${esc(c.owner_name || '–')}</div></li>
         </ul>
+        <div class="section-title">Lage</div>
+        <div id="cmap-box"></div>
         <div class="section-title">Verlauf</div>
         <div class="small muted">Angelegt am ${deDateTime(c.created_at.replace(' ', 'T'))}${c.created_by_name ? ` von <b>${esc(c.created_by_name)}</b>` : ''}<br>
         Zuletzt geändert am ${deDateTime(c.updated_at.replace(' ', 'T'))}${c.updated_by_name ? ` von <b>${esc(c.updated_by_name)}</b>` : ''}</div>
@@ -854,6 +897,7 @@ async function viewCustomer(id, tab) {
           <div class="tabs">
             <button data-tab="zeitleiste" class="${curTab === 'zeitleiste' ? 'on' : ''}">Zeitleiste</button>
             <button data-tab="aufgaben" class="${curTab === 'aufgaben' ? 'on' : ''}">Aufgaben ${openTasks.length ? `<span class="badge">${openTasks.length}</span>` : ''}</button>
+            <button data-tab="maschinen" class="${curTab === 'maschinen' ? 'on' : ''}">Maschinen ${d.machines.length ? `<span class="badge grey">${d.machines.length}</span>` : ''}</button>
             <button data-tab="dateien" class="${curTab === 'dateien' ? 'on' : ''}">Dateien ${d.files.length ? `<span class="badge grey">${d.files.length}</span>` : ''}</button>
           </div>
           <div id="tab-body"></div>
@@ -895,8 +939,10 @@ async function viewCustomer(id, tab) {
         ${d.tasks.some((x) => x.status === 'done') ? `<div class="group-title">Erledigt</div><ul class="tasklist">${d.tasks.filter((x) => x.status === 'done').map((x) => taskItem(x, { showCustomer: false })).join('')}</ul>` : ''}`;
       $('#cu-task').onclick = () => openTaskForm({}, () => reload('aufgaben'), { id: c.id, name: custName(c) });
       bindTaskList(body, () => reload('aufgaben'));
-    } else renderFiles(body, d, reload);
+    } else if (t === 'maschinen') renderMachines(body, d, reload);
+    else renderFiles(body, d, reload);
   };
+  renderCustomerMap($('#cmap-box'), c, reload);
   $$('.tabs button').forEach((b) => b.onclick = () => showTab(b.dataset.tab));
   showTab(curTab);
 }
@@ -1013,6 +1059,201 @@ function renderTimeline(body, d, reload) {
   $('#tl-filter', body).value = filter;
   $('#tl-filter', body).onchange = (e) => { filter = e.target.value; sessionStorage.setItem('tlFilter', filter); drawList(); };
   drawList();
+}
+
+// ======================= Maschinen beim Kunden =======================
+function serviceState(m) {
+  if (!m.next_service) return '';
+  const t = todayISO();
+  if (m.next_service < t) return 'over';
+  if (m.next_service <= addDays(t, 30)) return 'soon';
+  return '';
+}
+function renderMachines(body, d, reload) {
+  const ms = d.machines;
+  body.innerHTML = `<div style="padding:12px 16px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center"><button class="btn primary sm" id="m-new">${icon('plus')} Maschine hinzufügen</button><span class="muted small">Mit „Nächste Wartung“ erinnert das CRM automatisch (Aufgabe + Kalender).</span></div>
+    ${ms.length ? `<div class="machines">${ms.map((m) => `<div class="machine" data-mid="${m.id}">
+      <div class="mi">${icon('tool', 'lg')}</div>
+      <div class="mb">
+        <div class="mt">${esc([m.brand, m.model].filter(Boolean).join(' ') || m.category)} ${m.category && (m.brand || m.model) ? `<span class="chip">${esc(m.category)}</span>` : ''} ${m.sold_by_us ? '<span class="chip ok">von uns verkauft</span>' : ''}</div>
+        <div class="meta">${[m.serial ? `Seriennr. <b>${esc(m.serial)}</b>` : '', m.year ? `Baujahr ${m.year}` : '', m.purchase_date ? `gekauft ${deDate(m.purchase_date)}` : ''].filter(Boolean).join(' · ') || '<span class="muted">keine weiteren Angaben</span>'}</div>
+        <div class="meta">${m.last_service ? `Letzte Wartung ${deDate(m.last_service)}` : ''}${m.next_service ? `${m.last_service ? ' · ' : ''}<span class="svc ${serviceState(m)}">${icon('clock')} Nächste Wartung ${deDate(m.next_service)}</span>` : ''}${m.service_interval ? ` · ${INTERVALS[m.service_interval]}` : ''}</div>
+        ${m.notes ? `<div class="pre small" style="margin-top:6px">${esc(m.notes)}</div>` : ''}
+      </div>
+      <div class="ma"><button class="btn ghost icon sm" data-medit="${m.id}" title="Bearbeiten">${icon('edit')}</button></div>
+    </div>`).join('')}</div>` : '<div class="empty">Noch keine Maschinen erfasst</div>'}`;
+  $('#m-new', body).onclick = () => openMachineForm({ customer_id: d.customer.id }, () => reload('maschinen'));
+  $$('[data-mid]', body).forEach((el) => el.onclick = () => openMachineForm(ms.find((m) => m.id === Number(el.dataset.mid)), () => reload('maschinen')));
+}
+async function openMachineForm(m, onSaved) {
+  const isEdit = !!m.id;
+  const meta = state.meta || await loadMeta();
+  const cats = [...new Set([...MACHINE_CATS, ...meta.categories])];
+  const md = modal({
+    title: isEdit ? 'Maschine bearbeiten' : 'Maschine hinzufügen',
+    body: `<form id="mf"><div class="form-grid">
+      <div class="field"><label>Art</label><input type="text" name="category" list="mf-cats" value="${esc(m.category || '')}" placeholder="z. B. Rasentraktor"><datalist id="mf-cats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></div>
+      <div class="field"><label>Marke / Hersteller</label><input type="text" name="brand" list="mf-brands" value="${esc(m.brand || '')}" placeholder="z. B. Husqvarna"><datalist id="mf-brands">${meta.brands.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></div>
+      <div class="field"><label>Modell / Typ</label><input type="text" name="model" value="${esc(m.model || '')}"></div>
+      <div class="field"><label>Seriennummer</label><input type="text" name="serial" value="${esc(m.serial || '')}"></div>
+      <div class="field"><label>Baujahr</label><input type="number" name="year" min="1950" max="2100" value="${esc(m.year || '')}"></div>
+      <div class="field"><label>Kaufdatum</label><input type="date" name="purchase_date" value="${esc(m.purchase_date || '')}"></div>
+      <div class="field full"><label class="check"><input type="checkbox" name="sold_by_us" ${m.sold_by_us ? 'checked' : ''}> Bei uns gekauft</label></div>
+      <div class="field"><label>Wartungsintervall</label><select name="service_interval">${Object.entries(INTERVALS).map(([k, v]) => `<option value="${k}" ${(m.service_interval || '') === k ? 'selected' : ''}>${k ? v : 'kein Intervall'}</option>`).join('')}</select></div>
+      <div class="field"><label>Letzte Wartung</label><input type="date" name="last_service" value="${esc(m.last_service || '')}"></div>
+      <div class="field"><label>Nächste Wartung <span class="muted">(leer = aus Intervall)</span></label><input type="date" name="next_service" value="${esc(m.next_service || '')}"></div>
+      <div class="field full"><label>Notizen</label><textarea name="notes" rows="3" placeholder="z. B. Betriebsstunden, Zubehör, Besonderheiten">${esc(m.notes || '')}</textarea></div>
+      <div class="full callout info small">${icon('tool')} Bei „Nächste Wartung“ legt das CRM eine Wartungsaufgabe für den Betreuer an und erinnert einen Tag vorher. Wird sie erledigt, wird die nächste Wartung automatisch nach dem Intervall geplant.</div>
+    </div></form>`,
+    foot: `<span class="left">${isEdit ? `<button class="btn danger" id="mf-del">${icon('trash')} Entfernen</button>` : ''}</span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="mf-save">Speichern</button>`,
+  });
+  $('#mf-save', md.el).onclick = async () => {
+    try {
+      const body = formData($('#mf', md.el));
+      if (isEdit) await api('/machines/' + m.id, { method: 'PUT', body });
+      else await api(`/customers/${m.customer_id}/machines`, { method: 'POST', body });
+      md.close(); toast('Maschine gespeichert'); loadMeta(); onSaved && onSaved();
+    } catch (e) { fail(e); }
+  };
+  if (isEdit) $('#mf-del', md.el).onclick = async () => {
+    if (!(await confirmBox('Diese Maschine beim Kunden entfernen? Offene Wartungsaufgaben werden mit gelöscht.', 'Entfernen'))) return;
+    try { await api('/machines/' + m.id, { method: 'DELETE' }); md.close(); toast('Maschine entfernt'); onSaved && onSaved(); } catch (e) { fail(e); }
+  };
+}
+
+// ======================= Lage des Kunden (Mini-Karte) =======================
+async function renderCustomerMap(box, c, reload) {
+  const hasAddr = c.city || c.zip;
+  const note = c.lat != null
+    ? (c.geo_status === 'approx' ? 'Nur der Ort wurde gefunden – Pin auf den Hof ziehen, um die Lage zu korrigieren.' : 'Pin verschieben, falls die Lage nicht stimmt.')
+    : !hasAddr ? 'Keine Adresse hinterlegt. Auf die Karte klicken, um die Lage zu setzen.'
+      : c.geo_status === 'fail' ? 'Adresse wurde nicht gefunden. Auf die Karte klicken, um die Lage zu setzen.'
+        : 'Lage wird gerade ermittelt … (dauert einen Moment)';
+  box.innerHTML = `<div class="cmap" id="cmap"></div><div class="small muted" style="margin:6px 0 14px">${note}</div>`;
+  let Lf;
+  try { Lf = await loadLeaflet(); } catch (e) { box.innerHTML = `<div class="small muted">${esc(e.message)}</div>`; return; }
+  if (!document.body.contains(box)) return;
+  const map = Lf.map($('#cmap', box), { scrollWheelZoom: false, attributionControl: true });
+  Lf.tileLayer(...OSM).addTo(map);
+  const save = async (ll) => {
+    try { await api(`/customers/${c.id}/geo`, { method: 'PUT', body: { lat: ll.lat, lng: ll.lng } }); toast('Lage gespeichert'); } catch (e) { fail(e); }
+  };
+  if (c.lat != null) {
+    map.setView([c.lat, c.lng], c.geo_status === 'approx' ? 13 : 16);
+    const mk = Lf.marker([c.lat, c.lng], { draggable: true }).addTo(map);
+    mk.on('dragend', () => save(mk.getLatLng()));
+  } else {
+    map.setView(...HOME_VIEW);
+    map.once('click', (e) => { Lf.marker(e.latlng).addTo(map); save(e.latlng).then(() => reload()); });
+  }
+  setTimeout(() => map.invalidateSize(), 50);
+}
+
+// ======================= Karte =======================
+const CONTACT_COLORS = { m1: '#2e9b4a', m3: '#9bbf2f', m6: '#e39a12', old: '#c0292f' };
+const TYPE_COLORS = { Landwirt: '#3f6b22', Gartenbau: '#8fb33a', Forst: '#22573d', Kommune: '#2a5a8a', Gewerbe: '#8a5420', Privat: '#7a4fb0' };
+function contactBucket(lc) {
+  if (!lc) return 'old';
+  const d = lc.slice(0, 10); const t = todayISO();
+  const mAgo = (n) => { const x = parseISO(t); x.setMonth(x.getMonth() - n); return fmtISO(x); };
+  if (d >= mAgo(1)) return 'm1'; if (d >= mAgo(3)) return 'm3'; if (d >= mAgo(6)) return 'm6'; return 'old';
+}
+async function viewMap(main) {
+  let saved = {};
+  try { saved = JSON.parse(sessionStorage.getItem('mapFilter') || '{}'); } catch { /* egal */ }
+  const st = { q: '', status: '', type: '', owner: '', contact: '', tag: '', extra: '', color: 'status', ...saved };
+  let tour = [];
+  try { tour = JSON.parse(sessionStorage.getItem('tour') || '[]'); } catch { /* egal */ }
+  const meta = await loadMeta();
+  const others = state.users.filter((u) => u.active && u.id !== state.me.id);
+  main.innerHTML = `
+    <div class="page-head"><h1>Karte</h1><span class="muted small" id="mp-info"></span></div>
+    <div class="filters">
+      <div class="grow-s"><input type="search" id="mp-q" placeholder="Suchen …" value="${esc(st.q)}"></div>
+      <select id="mp-status"><option value="">Kunden &amp; Interessenten</option><option value="buyer">nur kaufende Kunden</option><option value="lead">nur Interessenten</option></select>
+      <select id="mp-type"><option value="">Alle Kundenarten</option>${TYPES.map((t) => `<option>${t}</option>`).join('')}</select>
+      <select id="mp-owner"><option value="">Alle Betreuer</option><option value="me">Meine Kunden</option>${others.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
+      <select id="mp-contact"><option value="">Jeder letzte Kontakt</option><option value="m1">Kontakt im letzten Monat</option><option value="m3">vor 1–3 Monaten</option><option value="m6">vor 3–6 Monaten</option><option value="old">länger als 6 Monate / nie</option></select>
+      <select id="mp-tag"><option value="">Alle Schlagworte</option>${meta.tags.map((t) => `<option value="${esc(t.tag)}">${esc(t.tag)}</option>`).join('')}</select>
+      <select id="mp-extra"><option value="">Weitere Filter …</option><option value="visit_due">Besuch fällig</option><option value="service_due">Wartung fällig</option><option value="open_tasks">mit offenen Aufgaben</option></select>
+      <select id="mp-color" title="Farbe der Punkte"><option value="status">Farbe: Kunde / Interessent</option><option value="contact">Farbe: letzter Kontakt</option><option value="type">Farbe: Kundenart</option></select>
+    </div>
+    <div class="mapwrap">
+      <div class="card mapcard"><div id="bigmap"></div><div class="map-legend" id="mp-legend"></div></div>
+      <aside class="card tour"><div class="card-head"><h2>${icon('car')} Tour</h2><span class="badge grey" id="tour-n">0</span></div>
+        <div id="tour-list"></div>
+        <div class="tour-foot"><a class="btn primary sm" id="tour-go" target="_blank" rel="noopener">${icon('pin')} Route in Google Maps</a><button class="btn sm" id="tour-clear">Leeren</button></div>
+      </aside>
+    </div>`;
+  ['status', 'type', 'owner', 'contact', 'tag', 'extra', 'color'].forEach((k) => { $('#mp-' + k).value = st[k]; });
+  let Lf;
+  try { Lf = await loadLeaflet(); } catch (e) { $('#bigmap').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  const map = Lf.map('bigmap', { preferCanvas: true }).setView(...HOME_VIEW);
+  Lf.tileLayer(...OSM).addTo(map);
+  const layer = Lf.layerGroup().addTo(map);
+  let firstFit = true; let timer = null; let lastPoints = [];
+  const addrOf = (p) => [p.street, [p.zip, p.city].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  const drawTour = () => {
+    try { sessionStorage.setItem('tour', JSON.stringify(tour)); } catch { /* egal */ }
+    $('#tour-n').textContent = tour.length;
+    $('#tour-list').innerHTML = tour.length ? `<ol class="tourlist">${tour.map((t, i) => `<li><div><b>${esc(t.name)}</b><div class="small muted">${esc(t.addr)}</div></div>
+      <span class="acts">${i ? `<button class="btn ghost icon sm" data-up="${i}" title="nach oben">${icon('left')}</button>` : ''}<button class="btn ghost icon sm" data-rm="${i}" title="entfernen">${icon('x')}</button></span></li>`).join('')}</ol>`
+      : '<div class="empty small">Auf einen Punkt klicken und „Zur Tour“ wählen. Die Reihenfolge ist die Fahrreihenfolge.</div>';
+    const stops = tour.map((t) => t.addr || `${t.lat},${t.lng}`);
+    const go = $('#tour-go');
+    if (stops.length) {
+      go.href = `https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=${encodeURIComponent(stops[stops.length - 1])}${stops.length > 1 ? '&waypoints=' + encodeURIComponent(stops.slice(0, -1).join('|')) : ''}`;
+      go.classList.remove('disabled');
+    } else { go.removeAttribute('href'); go.classList.add('disabled'); }
+    $$('[data-rm]').forEach((b) => b.onclick = () => { tour.splice(Number(b.dataset.rm), 1); drawTour(); });
+    $$('[data-up]').forEach((b) => b.onclick = () => { const i = Number(b.dataset.up); [tour[i - 1], tour[i]] = [tour[i], tour[i - 1]]; drawTour(); });
+  };
+  $('#tour-clear').onclick = () => { tour = []; drawTour(); };
+  drawTour();
+  const colorOf = (p) => (st.color === 'contact' ? CONTACT_COLORS[contactBucket(p.last_contact)]
+    : st.color === 'type' ? (TYPE_COLORS[p.customer_type] || '#6a6d6e')
+      : (p.is_buyer ? '#c0292f' : '#4caf50'));
+  const legend = () => {
+    const items = st.color === 'contact' ? [['m1', 'Kontakt < 1 Monat'], ['m3', '1–3 Monate'], ['m6', '3–6 Monate'], ['old', '> 6 Monate / nie']].map(([k, l]) => [CONTACT_COLORS[k], l])
+      : st.color === 'type' ? [...TYPES.map((t) => [TYPE_COLORS[t], t]), ['#6a6d6e', 'ohne Kundenart']]
+        : [['#c0292f', 'kaufender Kunde'], ['#4caf50', 'Interessent']];
+    $('#mp-legend').innerHTML = items.map(([c, l]) => `<span><i style="background:${c}"></i>${esc(l)}</span>`).join('');
+  };
+  const load = async () => {
+    try { sessionStorage.setItem('mapFilter', JSON.stringify(st)); } catch { /* egal */ }
+    const qs = new URLSearchParams({ q: st.q, status: st.status, type: st.type, owner: st.owner, contact: st.contact, tag: st.tag, extra: st.extra });
+    const data = await api('/map?' + qs);
+    if (!document.body.contains($('#bigmap'))) return;
+    lastPoints = data.points;
+    layer.clearLayers(); legend();
+    for (const p of data.points) {
+      const mk = Lf.circleMarker([p.lat, p.lng], { radius: 8, weight: 2, color: '#fff', fillColor: colorOf(p), fillOpacity: 0.95 });
+      mk.bindTooltip(esc(custName(p)));
+      mk.bindPopup(() => `<div class="mpop"><b>${esc(custName(p))}</b>${p.is_buyer ? '' : ' <span class="chip lead">Interessent</span>'}${p.customer_type ? ` <span class="chip t-${p.customer_type}">${p.customer_type}</span>` : ''}
+        <div>${esc(addrOf(p))}${p.geo === 'approx' ? ' <span class="muted">(Lage ungefähr)</span>' : ''}</div>
+        ${p.mobile || p.phone ? `<div><a href="${telHref(p.mobile || p.phone)}">${esc(p.mobile || p.phone)}</a></div>` : ''}
+        <div class="muted">Letzter Kontakt: ${p.last_contact ? deDate(p.last_contact) + ' ' + agoText(p.last_contact) : 'noch keiner'}${p.open_tasks ? ` · ${p.open_tasks} offene Aufgabe${p.open_tasks > 1 ? 'n' : ''}` : ''}</div>
+        ${p.tags ? `<div style="margin-top:4px">${tagChips(p.tags, 'xs')}</div>` : ''}
+        <div class="mpop-acts"><a class="btn sm" href="#/kunden/${p.id}">Öffnen</a><button class="btn sm primary" data-tour="${p.id}">${tour.some((t) => t.id === p.id) ? 'In der Tour ✓' : '+ Zur Tour'}</button></div></div>`);
+      mk.on('popupopen', (e) => {
+        const b = e.popup.getElement().querySelector('[data-tour]');
+        if (b) b.onclick = () => { if (!tour.some((t) => t.id === p.id)) { tour.push({ id: p.id, name: custName(p), addr: addrOf(p), lat: p.lat, lng: p.lng }); drawTour(); } b.textContent = 'In der Tour ✓'; };
+      });
+      mk.addTo(layer);
+    }
+    if (data.points.length && firstFit) { map.fitBounds(Lf.latLngBounds(data.points.map((p) => [p.lat, p.lng])), { padding: [30, 30], maxZoom: 13 }); firstFit = false; }
+    $('#mp-info').innerHTML = `${data.points.length} von ${data.total} Kunden auf der Karte${data.pending ? ` · ${data.pending} werden gerade verortet …` : ''}${data.failed ? ` · <a href="#/kunden" id="mp-failed">${data.failed} Adressen nicht gefunden</a>` : ''}${data.noAddress ? ` · ${data.noAddress} ohne Adresse` : ''}`;
+    const fl = $('#mp-failed');
+    if (fl) fl.onclick = () => { try { sessionStorage.setItem('custFilter', JSON.stringify({ ...CUST_DEFAULTS, extra: 'no_geo' })); } catch { /* egal */ } };
+    clearTimeout(timer);
+    if (data.pending) timer = setTimeout(() => { if (location.hash.startsWith('#/karte')) load().catch(() => {}); }, 15000);
+  };
+  const refit = () => { firstFit = true; return load(); };
+  $('#mp-q').oninput = debounce((e) => { st.q = e.target.value; refit(); }, 300);
+  ['status', 'type', 'owner', 'contact', 'tag', 'extra'].forEach((k) => { $('#mp-' + k).onchange = (e) => { st[k] = e.target.value; refit(); }; });
+  $('#mp-color').onchange = (e) => { st.color = e.target.value; load(); };
+  setTimeout(() => map.invalidateSize(), 50);
+  await load();
 }
 
 function renderFiles(body, d, reload) {

@@ -197,6 +197,45 @@ const U = require('../lib/util');
     const fu = await call('a', 'POST', `/api/customers/${buyer}/entries`, { kind: 'besuch', text: 'Besuch', tasks: [{ kind: 'besuch', title: 'Zweiter Besuch', due_date: U.addDays(U.today(), 9), assigned_to: kollege.id, participants: [third.id] }] });
     assert.equal((await call('t', 'GET', `/api/tasks/${fu.taskIds[0]}`)).participant_names, 'Tina Dritte');
 
+    // Schlagworte
+    await call('a', 'PUT', `/api/customers/${buyer}`, { tags: 'Messe 2026, Mähroboter' });
+    assert.deepEqual((await call('a', 'GET', '/api/customers?tag=' + encodeURIComponent('Messe 2026'))).rows.map((r) => r.id), [buyer]);
+    await call('a', 'POST', '/api/customers/bulk-update', { ids: [lead, buyer], add_tag: 'Messe 2026' });
+    assert.equal((await call('a', 'GET', '/api/customers?tag=' + encodeURIComponent('messe 2026'))).rows.length, 2);
+    await call('a', 'POST', '/api/customers/bulk-update', { ids: [buyer], remove_tag: 'Mähroboter' });
+    const meta = await call('a', 'GET', '/api/meta');
+    assert.deepEqual(meta.tags, [{ tag: 'Messe 2026', n: 2 }]);
+
+    // Maschinen + Wartungserinnerung
+    const mid = (await call('a', 'POST', `/api/customers/${buyer}/machines`, { category: 'Rasentraktor', brand: 'Husqvarna', model: 'TS 142', serial: 'HQ-4711', year: 2021, sold_by_us: true, service_interval: 'yearly', next_service: U.addDays(U.today(), 1) })).id;
+    let cd = await call('a', 'GET', `/api/customers/${buyer}`);
+    assert.equal(cd.machines.length, 1);
+    const svc = cd.tasks.find((t) => t.kind === 'wartung' && t.status === 'open');
+    assert.ok(svc && svc.due_date === U.addDays(U.today(), 1) && svc.machine_id === mid, 'Wartungsaufgabe fehlt');
+    assert.equal((await call('a', 'GET', '/api/customers?q=HQ-4711')).rows[0].id, buyer, 'Suche nach Seriennummer');
+    assert.ok((await call('a', 'GET', '/api/customers?extra=service_due')).rows.some((r) => r.id === buyer));
+    await call('a', 'POST', `/api/tasks/${svc.id}/done`, { note: 'Messer geschliffen' });
+    cd = await call('a', 'GET', `/api/customers/${buyer}`);
+    assert.equal(cd.machines[0].last_service, U.today());
+    assert.equal(cd.machines[0].next_service, U.addMonths(U.today(), 12));
+    assert.equal(cd.tasks.filter((t) => t.kind === 'wartung' && t.status === 'open').length, 1, 'nächste Wartung nicht geplant');
+    await call('a', 'PUT', `/api/machines/${mid}`, { next_service: '', service_interval: '' });
+    cd = await call('a', 'GET', `/api/customers/${buyer}`);
+    assert.equal(cd.tasks.filter((t) => t.kind === 'wartung' && t.status === 'open').length, 0);
+    await call('a', 'DELETE', `/api/machines/${mid}`);
+    assert.equal((await call('a', 'GET', `/api/customers/${buyer}`)).machines.length, 0);
+
+    // Karte / Verortung (Geocoder simuliert)
+    const geo = require('../lib/geo');
+    const fakeFetch = async (url) => ({ ok: true, status: 200, json: async () => (url.includes('street=') ? [] : [{ lat: '51.97', lon: '7.17' }]) });
+    for (let i = 0; i < 50 && await geo.geocodeNext(fakeFetch); i++);
+    const mp = await call('a', 'GET', '/api/map?q=Coesfeld');
+    assert.equal(mp.points.length, 2); assert.equal(mp.points[0].geo, 'approx'); assert.equal(mp.pending, 0);
+    await call('a', 'PUT', `/api/customers/${buyer}/geo`, { lat: 51.98, lng: 7.2 });
+    assert.equal((await call('a', 'GET', `/api/customers/${buyer}`)).customer.geo_status, 'manual');
+    await call('a', 'PUT', `/api/customers/${buyer}`, { street: 'Neue Straße 1' });
+    assert.equal((await call('a', 'GET', `/api/customers/${buyer}`)).customer.geo_status, '', 'Adressänderung muss neu verorten');
+
     // iCal
     const ical = await call('a', 'GET', '/api/me/ical');
     const feed = await (await fetch(base + new URL(ical.https).pathname)).text();
