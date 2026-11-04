@@ -265,6 +265,28 @@ const U = require('../lib/util');
     assert.equal(saw.next_service, U.addMonths(U.today(), 1), 'nächste Wartung aus letzter Wartung + Intervall');
     assert.ok(saw.notes.includes('Betriebsstunden: 55'));
     assert.equal((await call('a', 'GET', '/api/customers?q=KM%2070')).rows[0].last_name, 'Kunde');
+    // erneuter Import (ohne Seriennummer, jetzt mit Gerätetyp) verdoppelt nicht
+    const kmCust = (await call('a', 'GET', '/api/customers?q=KM%2070')).rows[0].id;
+    const rws = XLSX.utils.aoa_to_sheet([['Kunde', 'Ort', 'Hersteller', 'Typ', 'Art'], ['Neu Kunde', 'Havixbeck', 'Kärcher', 'KM 70', 'Kehrmaschine']]);
+    const rwb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(rwb, rws, 'M');
+    const rpv = await call('a', 'POST', '/api/import/machines/preview', XLSX.write(rwb, { type: 'buffer', bookType: 'xlsx' }), true);
+    const rres = await call('a', 'POST', '/api/import/machines/commit', { rows: rpv.rows });
+    assert.equal(rres.created, 0, 'Re-Import legt nichts doppelt an'); assert.equal(rres.updated, 1);
+    let km = (await call('a', 'GET', `/api/customers/${kmCust}`)).machines;
+    assert.equal(km.length, 1); assert.equal(km[0].category, 'Kehrmaschine');
+    // vorhandene Doppelte zusammenführen
+    await call('a', 'POST', `/api/customers/${kmCust}/machines`, { brand: 'Kärcher', model: 'KM 70', service_interval: 'yearly', last_service: U.addMonths(U.today(), -2) });
+    await call('a', 'POST', `/api/customers/${kmCust}/machines`, { brand: 'Kärcher', model: 'KM 70', notes: 'Bürste neu' });
+    await call('a', 'POST', `/api/customers/${kmCust}/machines`, { brand: 'Stihl', model: 'MS 261' });
+    const dup = await call('a', 'GET', '/api/machines/duplicates');
+    assert.equal(dup.machines, 2, 'zwei Doppelte'); assert.equal(dup.groups, 1);
+    const ddr = await call('a', 'POST', '/api/machines/dedupe', {});
+    assert.equal(ddr.removed, 2);
+    km = (await call('a', 'GET', `/api/customers/${kmCust}`)).machines;
+    assert.equal(km.length, 2);
+    const k = km.find((x) => x.model === 'KM 70');
+    assert.equal(k.category, 'Kehrmaschine'); assert.equal(k.service_interval, 'yearly'); assert.ok((k.notes || '').includes('Bürste neu'));
+    assert.equal((await call('a', 'GET', '/api/machines/duplicates')).machines, 0);
 
     // Abwesenheiten
     const d1 = U.addDays(U.today(), 20); const d3 = U.addDays(U.today(), 22);

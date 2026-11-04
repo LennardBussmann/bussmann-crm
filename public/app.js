@@ -930,11 +930,25 @@ function openMachineImport(reload) {
     body: `<div>
       <p>Jede Zeile = eine Maschine. Das CRM ordnet sie automatisch dem passenden Kunden zu – über <b>Kundennr.</b> (aus dem CRM-Export), <b>E-Mail</b>, <b>Telefon</b> oder <b>Name</b> (bei gleichen Namen zusätzlich PLZ/Ort). Erkannte Spalten u. a.: <i>Art, Marke/Hersteller, Modell/Typ, Seriennummer, Baujahr, Kaufdatum, Bei uns gekauft, Wartungsintervall, Letzte/Nächste Wartung, Betriebsstunden, Bemerkung</i>.</p>
       <p><a href="/api/import/machines-template.xlsx">${icon('download')} Vorlage herunterladen</a></p>
+      <div id="mi-dups"></div>
       <label class="files-drop" id="mi-drop" style="display:block;margin:16px 0">${icon('upload', 'lg')}<br>Excel-Datei hierher ziehen oder <u>auswählen</u><input type="file" id="mi-file" accept=".xlsx,.xls,.csv,.ods" hidden></label>
       <div id="mi-preview"></div></div>`,
     foot: `<span class="left"></span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="mi-go" disabled>Importieren</button>`,
   });
   let rows = []; let fileBuf = null; let overrides = {};
+  const checkDups = async () => {
+    const d = await api('/machines/duplicates').catch(() => null);
+    const box = $('#mi-dups', m.el); if (!box) return;
+    if (!d || !d.machines) { box.innerHTML = ''; return; }
+    const adm = state.me.role === 'admin';
+    box.innerHTML = `<div class="callout warn" style="margin:10px 0"><b>${d.machines} doppelte Maschine${d.machines > 1 ? 'n' : ''}</b> bei ${d.groups} Kunden gefunden, z. B. ${d.examples.map(esc).join('; ')}.
+      ${adm ? `<div style="margin-top:8px"><button class="btn sm primary" id="mi-dedupe">${icon('check')} Jetzt zusammenführen</button> <span class="muted small">Die Angaben werden zusammengelegt (z. B. Gerätetyp aus der neuen, Wartung aus der alten Zeile), dann bleibt je Maschine ein Eintrag.</span></div>` : '<div class="small" style="margin-top:6px">Ein Administrator kann sie hier zusammenführen.</div>'}</div>`;
+    if (adm) $('#mi-dedupe', m.el).onclick = async () => {
+      if (!(await confirmBox(`<b>${d.machines} doppelte Maschinen</b> zusammenführen? Von jeder Maschine bleibt ein Eintrag mit allen Angaben übrig.`, 'Zusammenführen'))) return;
+      try { const r = await api('/machines/dedupe', { method: 'POST', body: {} }); toast(`${r.removed} doppelte Maschinen zusammengeführt`); checkDups(); reload && reload(); } catch (e) { fail(e); }
+    };
+  };
+  checkDups();
   const draw = (mapping) => {
     const ok = rows.filter((r) => !r._error);
     const matched = ok.filter((r) => r.customer_id);

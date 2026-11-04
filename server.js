@@ -483,6 +483,70 @@ app.delete('/api/machines/:id', auth, (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Doppelte Maschinen ----------
+const ns = (s) => importer.normSerial(s);
+/** Gleiche Maschine? Seriennummer gleich – oder ohne Seriennummer: gleiche Marke + Modell (+ Art/Baujahr, wenn beide gesetzt) */
+function sameMachine(a, b) {
+  if (ns(a.serial) && ns(b.serial)) return ns(a.serial) === ns(b.serial);
+  if (ns(a.serial) || ns(b.serial)) {
+    // eine Seite ohne Nummer: nur gleich, wenn Marke+Modell gleich und nicht leer
+    if (!ns(a.model) && !ns(a.brand)) return false;
+  }
+  if (!ns(a.brand) && !ns(a.model)) return ns(a.category) !== '' && ns(a.category) === ns(b.category) && !ns(b.brand) && !ns(b.model);
+  if (ns(a.brand) !== ns(b.brand) || ns(a.model) !== ns(b.model)) return false;
+  if (ns(a.category) && ns(b.category) && ns(a.category) !== ns(b.category)) return false;
+  if (a.year && b.year && Number(a.year) !== Number(b.year)) return false;
+  return true;
+}
+function findMachineDuplicates() {
+  const groups = [];
+  const byCustomer = new Map();
+  for (const m of all('SELECT * FROM machines ORDER BY customer_id, id')) {
+    if (!byCustomer.has(m.customer_id)) byCustomer.set(m.customer_id, []);
+    byCustomer.get(m.customer_id).push(m);
+  }
+  for (const list of byCustomer.values()) {
+    const used = new Set();
+    for (const a of list) {
+      if (used.has(a.id)) continue;
+      const dups = list.filter((b) => b.id !== a.id && !used.has(b.id) && sameMachine(a, b) && sameMachine(b, a));
+      if (dups.length) { used.add(a.id); dups.forEach((d) => used.add(d.id)); groups.push({ keep: a, drop: dups }); }
+    }
+  }
+  return groups;
+}
+app.get('/api/machines/duplicates', auth, (req, res) => {
+  const g = findMachineDuplicates();
+  res.json({ groups: g.length, machines: g.reduce((n, x) => n + x.drop.length, 0),
+    examples: g.slice(0, 5).map((x) => { const c = get('SELECT first_name, last_name FROM customers WHERE id=?', x.keep.customer_id); return `${[c?.first_name, c?.last_name].filter(Boolean).join(' ')}: ${L.machineName(x.keep)} (${x.drop.length + 1}×)`; }) });
+});
+app.post('/api/machines/dedupe', auth, admin, (req, res) => {
+  const groups = findMachineDuplicates();
+  let removed = 0;
+  tx(() => {
+    for (const { keep, drop } of groups) {
+      // Angaben zusammenführen: leere Felder der ältesten Maschine aus den Doppelten füllen
+      const merged = { ...keep };
+      for (const d of drop) {
+        for (const f of MACHINE_FIELDS) {
+          if ((merged[f] == null || merged[f] === '' || (f === 'sold_by_us' && !merged[f])) && d[f] != null && d[f] !== '') merged[f] = d[f];
+        }
+        if (d.notes && merged.notes && !merged.notes.includes(d.notes)) merged.notes += '\n' + d.notes;
+      }
+      run(`UPDATE machines SET ${MACHINE_FIELDS.map((f) => f + '=?').join(',')}, updated_by=?, updated_at=datetime('now','localtime') WHERE id=?`, ...MACHINE_FIELDS.map((f) => merged[f]), req.user.id, keep.id);
+      for (const d of drop) {
+        run(`DELETE FROM tasks WHERE machine_id=? AND status='open'`, d.id);
+        run('UPDATE tasks SET machine_id=? WHERE machine_id=?', keep.id, d.id);
+        run('DELETE FROM machines WHERE id=?', d.id);
+        removed++;
+      }
+      L.syncMachineTask(keep.id);
+      L.systemEntry(keep.customer_id, req.user.id, `Doppelte Maschine zusammengeführt: ${L.machineName(merged)}`);
+    }
+  });
+  res.json({ removed, groups: groups.length });
+});
+
 // ---------- Maschinen-Import ----------
 app.get('/api/import/machines-template.xlsx', auth, (req, res) => {
   res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -508,6 +572,7 @@ app.post('/api/import/machines/commit', auth, (req, res) => {
   const rows = Array.isArray(req.body?.rows) ? req.body.rows.slice(0, 20000) : [];
   const createMissing = !!req.body?.createMissing;
   let created = 0; let updated = 0; let newCustomers = 0; const skipped = [];
+  const maxBefore = get('SELECT IFNULL(MAX(id),0) n FROM machines').n; // nur mit vorher vorhandenen Maschinen abgleichen
   tx(() => {
     const newCust = new Map(); // gleicher unbekannter Kunde in mehreren Zeilen -> nur einmal anlegen
     rows.forEach((row, i) => {
@@ -530,7 +595,8 @@ app.post('/api/import/machines/commit', auth, (req, res) => {
       const { m, error } = cleanMachine(row);
       if (error) { skipped.push({ row: i + 1, error }); return; }
       if (row.sold_by_us == null) m.sold_by_us = 0;
-      const ex = m.serial ? all('SELECT * FROM machines WHERE customer_id=?', cid).find((x) => importer.normSerial(x.serial) === importer.normSerial(m.serial)) : null;
+      // gleiche Seriennummer: immer derselbe Eintrag (auch innerhalb derselben Datei); ohne Nummer nur mit vorher vorhandenen abgleichen
+      const ex = all('SELECT * FROM machines WHERE customer_id=?', cid).find((x) => (ns(x.serial) && ns(m.serial)) ? ns(x.serial) === ns(m.serial) : (x.id <= maxBefore && sameMachine(x, m)));
       if (ex) {
         // vorhandene Maschine nur ergänzen, nichts überschreiben
         const fill = MACHINE_FIELDS.filter((f) => (ex[f] == null || ex[f] === '' || (f === 'sold_by_us' && !ex[f])) && m[f] != null && m[f] !== '' && m[f] !== 0);
