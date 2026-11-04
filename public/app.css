@@ -425,3 +425,11 @@ button.chip.tagchip { border: 1px dashed var(--line-strong); cursor: pointer; fo
 .ev.absence.k-abs-krank { border-left-color: #b26a00; background: repeating-linear-gradient(135deg, #fff4e0, #fff4e0 6px, #fbead0 6px, #fbead0 12px); }
 .month .cell.away { background: repeating-linear-gradient(135deg, #fafafa, #fafafa 8px, #f2f3f3 8px, #f2f3f3 16px); }
 .callout.warn { background: var(--warn-50); color: var(--warn); border-color: #f0d199; }
+
+.mi-map { margin: 10px 0; border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 12px; background: var(--surface-2); }
+.mi-map summary { cursor: pointer; font-weight: 700; font-size: 14px; display: flex; gap: 6px; align-items: center; }
+.mi-map-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 8px 14px; margin-top: 10px; }
+.mi-map-grid label { display: grid; grid-template-columns: 100px 1fr; gap: 8px; align-items: center; font-size: 13px; font-weight: 700; }
+.mi-map-grid label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mi-map-grid select { padding: 5px 8px; font-size: 13px; }
+.mi-map-grid select.unmapped { border-color: var(--warn); background: var(--warn-50); }

@@ -492,7 +492,9 @@ app.get('/api/import/machines-template.xlsx', auth, (req, res) => {
 app.post('/api/import/machines/preview', auth, express.raw({ type: () => true, limit: '20mb' }), (req, res) => {
   try {
     const customers = all('SELECT id, first_name, last_name, company, zip, city, email, mobile, phone FROM customers');
-    const { rows, mapping } = importer.parseMachines(req.body, customers);
+    let overrides = {};
+    try { overrides = JSON.parse(req.query.map || '{}') || {}; } catch { /* ungültig -> automatisch */ }
+    const { rows, mapping } = importer.parseMachines(req.body, customers, overrides);
     // schon vorhandene Maschinen (gleiche Seriennummer beim Kunden) markieren
     for (const r of rows) {
       if (!r.customer_id || !r.serial) continue;

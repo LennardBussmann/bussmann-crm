@@ -922,6 +922,8 @@ function openImport(reload) {
 }
 
 // ======================= Maschinen-Import =======================
+const MI_FIELDS = [['', '– ignorieren –'], ['category', 'Art / Gerätetyp'], ['brand', 'Marke / Hersteller'], ['model', 'Modell / Typ'], ['serial', 'Seriennummer'], ['year', 'Baujahr'], ['purchase_date', 'Kaufdatum'], ['sold_by_us', 'Bei uns gekauft (ja/nein)'], ['service_interval', 'Wartungsintervall'], ['last_service', 'Letzte Wartung'], ['next_service', 'Nächste Wartung'], ['hours', 'Betriebsstunden'], ['notes', 'Bemerkung'],
+  ['customer_no', 'Kunde: Kundennr.'], ['customer_name', 'Kunde: Name (Vor- und Nachname)'], ['first_name', 'Kunde: Vorname'], ['last_name', 'Kunde: Nachname'], ['company', 'Kunde: Firma'], ['street', 'Kunde: Straße'], ['zip', 'Kunde: PLZ'], ['city', 'Kunde: Ort'], ['email', 'Kunde: E-Mail'], ['mobile', 'Kunde: Handy'], ['phone', 'Kunde: Telefon']];
 function openMachineImport(reload) {
   const m = modal({
     title: 'Maschinen aus Excel importieren', wide: true,
@@ -932,7 +934,7 @@ function openMachineImport(reload) {
       <div id="mi-preview"></div></div>`,
     foot: `<span class="left"></span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="mi-go" disabled>Importieren</button>`,
   });
-  let rows = [];
+  let rows = []; let fileBuf = null; let overrides = {};
   const draw = (mapping) => {
     const ok = rows.filter((r) => !r._error);
     const matched = ok.filter((r) => r.customer_id);
@@ -946,10 +948,13 @@ function openMachineImport(reload) {
     $('#mi-preview', m.el).innerHTML = `
       <div class="callout ${none.length || amb.length ? 'warn' : 'info'}"><b>${rows.length}</b> Zeilen gelesen: <b>${matched.length}</b> Maschinen einem Kunden zugeordnet${amb.length ? `, <b>${amb.length}</b> mit mehreren möglichen Kunden (bitte auswählen)` : ''}${none.length ? `, <b>${none.length}</b> ohne passenden Kunden` : ''}.
         ${unmapped.length ? `<br>Nicht erkannte Spalten (werden ignoriert): ${unmapped.map(esc).join(', ')}` : ''}</div>
+      <details class="mi-map" ${unmapped.length ? 'open' : ''}><summary>${icon('edit')} Spalten-Zuordnung prüfen${unmapped.length ? ` – <b>${unmapped.length} Spalte${unmapped.length > 1 ? 'n' : ''} nicht erkannt</b>` : ''}</summary>
+        <div class="mi-map-grid">${(mapping || []).map((x) => `<label><span title="${esc(x.column)}">${esc(x.column)}</span><select data-col="${x.index}" class="${x.field ? '' : 'unmapped'}">${MI_FIELDS.map(([k, l]) => `<option value="${k}" ${(x.field || '') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>`).join('')}</div></details>
       ${none.length ? `<label class="check" style="margin:10px 0"><input type="checkbox" id="mi-create"> <span>Nicht gefundene Kunden <b>neu anlegen</b> (sonst werden diese Zeilen übersprungen)</span></label>` : ''}
       <div class="table-wrap" style="max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:6px;margin-top:10px"><table class="list"><thead><tr><th>Kunde in der Datei</th><th>Zugeordnet zu</th><th>Art</th><th>Marke</th><th>Modell</th><th>Seriennr.</th><th>Baujahr</th><th>Kauf</th><th>Nächste Wartung</th></tr></thead><tbody>
       ${rows.slice(0, 500).map((r, i) => `<tr style="cursor:default"><td>${esc(r._label)}</td><td class="nowrap">${status(r, i)}</td><td>${esc(r.category)}</td><td>${esc(r.brand)}</td><td>${esc(r.model)}</td><td>${esc(r.serial)}</td><td>${r.year || ''}</td><td>${deDate(r.purchase_date)}</td><td>${deDate(r.next_service)}${r.service_interval ? ` <span class="muted small">${INTERVALS[r.service_interval]}</span>` : ''}</td></tr>`).join('')}
       </tbody></table></div>${rows.length > 500 ? '<p class="muted small">Vorschau zeigt die ersten 500 Zeilen.</p>' : ''}`;
+    $$('[data-col]', m.el).forEach((s) => s.onchange = () => { overrides[s.dataset.col] = s.value; preview(); });
     $$('[data-cand]', m.el).forEach((s) => s.onchange = () => {
       const r = rows[Number(s.dataset.cand)]; const c = r._candidates.find((x) => x.id === Number(s.value));
       if (c) { r.customer_id = c.id; r._customer_name = `${c.name} (${c.city})`; r._via = 'Auswahl'; draw(mapping); }
@@ -969,12 +974,16 @@ function openMachineImport(reload) {
     if (cr) cr.onchange = upd;
     upd();
   };
-  const handle = async (file) => {
-    if (!file) return;
+  const preview = async () => {
     try {
-      const res = await api('/import/machines/preview', { method: 'POST', raw: true, body: await file.arrayBuffer(), headers: { 'Content-Type': 'application/octet-stream' } });
+      const res = await api('/import/machines/preview?map=' + encodeURIComponent(JSON.stringify(overrides)), { method: 'POST', raw: true, body: fileBuf, headers: { 'Content-Type': 'application/octet-stream' } });
       rows = res.rows; draw(res.mapping);
     } catch (e) { fail(e); }
+  };
+  const handle = async (file) => {
+    if (!file) return;
+    fileBuf = await file.arrayBuffer(); overrides = {};
+    preview();
   };
   $('#mi-file', m.el).onchange = (e) => handle(e.target.files[0]);
   const drop = $('#mi-drop', m.el);
