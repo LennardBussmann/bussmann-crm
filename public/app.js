@@ -31,7 +31,7 @@ const debounce = (fn, ms = 250) => { let t; return (...a) => { clearTimeout(t); 
 const telHref = (n) => 'tel:' + String(n).replace(/[^\d+]/g, '');
 const fmtSize = (b) => (b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
 
-const TYPES = ['Landwirt', 'Gartenbau', 'Forst', 'Kommune', 'Gewerbe', 'Privat'];
+const TYPES = ['Landwirt', 'Gartenbau', 'Forst', 'Kommune', 'Gewerbe', 'Verein', 'Privat'];
 const INTERVALS = { '': 'Kein Intervall', monthly: 'Monatlich', quarterly: 'Vierteljährlich', halfyearly: 'Halbjährlich', yearly: 'Jährlich' };
 const TASK_KINDS = { anruf: 'Anruf', termin: 'Termin', besuch: 'Besuch', angebot: 'Angebot', wartung: 'Wartung', aufgabe: 'Aufgabe' };
 const ABSENCE_KINDS = { urlaub: ['Urlaub', '🏖'], privat: ['Privat / geblockt', '🔒'], krank: ['Krank', '🤒'], schulung: ['Schulung / Messe', '🎓'], sonstiges: ['Abwesend', '⛔'] };
@@ -1331,7 +1331,7 @@ async function renderCustomerMap(box, c, reload) {
 
 // ======================= Karte =======================
 const CONTACT_COLORS = { m1: '#2e9b4a', m3: '#9bbf2f', m6: '#e39a12', old: '#c0292f' };
-const TYPE_COLORS = { Landwirt: '#3f6b22', Gartenbau: '#8fb33a', Forst: '#22573d', Kommune: '#2a5a8a', Gewerbe: '#8a5420', Privat: '#7a4fb0' };
+const TYPE_COLORS = { Landwirt: '#3f6b22', Gartenbau: '#8fb33a', Forst: '#22573d', Kommune: '#2a5a8a', Gewerbe: '#8a5420', Verein: '#b8860b', Privat: '#7a4fb0' };
 function contactBucket(lc) {
   if (!lc) return 'old';
   const d = lc.slice(0, 10); const t = todayISO();
