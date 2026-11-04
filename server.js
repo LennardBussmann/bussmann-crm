@@ -483,6 +483,73 @@ app.delete('/api/machines/:id', auth, (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Maschinen-Import ----------
+app.get('/api/import/machines-template.xlsx', auth, (req, res) => {
+  res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.set('Content-Disposition', 'attachment; filename="Maschinen_Importvorlage.xlsx"');
+  res.send(importer.machineTemplate());
+});
+app.post('/api/import/machines/preview', auth, express.raw({ type: () => true, limit: '20mb' }), (req, res) => {
+  try {
+    const customers = all('SELECT id, first_name, last_name, company, zip, city, email, mobile, phone FROM customers');
+    const { rows, mapping } = importer.parseMachines(req.body, customers);
+    // schon vorhandene Maschinen (gleiche Seriennummer beim Kunden) markieren
+    for (const r of rows) {
+      if (!r.customer_id || !r.serial) continue;
+      const ex = all('SELECT id, serial FROM machines WHERE customer_id=?', r.customer_id).find((x) => importer.normSerial(x.serial) === importer.normSerial(r.serial));
+      if (ex) r._existing = ex.id;
+    }
+    res.json({ rows, mapping });
+  } catch (e) { bad(res, e.message || 'Datei konnte nicht gelesen werden'); }
+});
+app.post('/api/import/machines/commit', auth, (req, res) => {
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows.slice(0, 20000) : [];
+  const createMissing = !!req.body?.createMissing;
+  let created = 0; let updated = 0; let newCustomers = 0; const skipped = [];
+  tx(() => {
+    const newCust = new Map(); // gleicher unbekannter Kunde in mehreren Zeilen -> nur einmal anlegen
+    rows.forEach((row, i) => {
+      let cid = Number(row.customer_id) || null;
+      if (cid && !get('SELECT id FROM customers WHERE id=?', cid)) cid = null;
+      if (!cid && createMissing && row._cust && (row._cust.last_name || row._cust.company)) {
+        const key = JSON.stringify([row._cust.first_name, row._cust.last_name, row._cust.company, row._cust.zip]).toLowerCase();
+        if (newCust.has(key)) cid = newCust.get(key);
+        else {
+          const { c, error } = cleanCustomer({ ...row._cust, last_name: row._cust.last_name || row._cust.company, owner_id: req.user.id, is_buyer: true });
+          if (!error) {
+            const r = run(`INSERT INTO customers(${CUSTOMER_FIELDS.join(',')}, info, created_by, updated_by) VALUES(${CUSTOMER_FIELDS.map(() => '?').join(',')}, '', ?, ?)`,
+              ...CUSTOMER_FIELDS.map((f) => c[f] ?? (f === 'visit_interval' ? '' : null)), req.user.id, req.user.id);
+            cid = Number(r.lastInsertRowid); newCust.set(key, cid); newCustomers++;
+            L.systemEntry(cid, req.user.id, 'Kunde beim Maschinen-Import angelegt');
+          }
+        }
+      }
+      if (!cid) { skipped.push({ row: i + 1, error: 'kein Kunde zugeordnet' }); return; }
+      const { m, error } = cleanMachine(row);
+      if (error) { skipped.push({ row: i + 1, error }); return; }
+      if (row.sold_by_us == null) m.sold_by_us = 0;
+      const ex = m.serial ? all('SELECT * FROM machines WHERE customer_id=?', cid).find((x) => importer.normSerial(x.serial) === importer.normSerial(m.serial)) : null;
+      if (ex) {
+        // vorhandene Maschine nur ergänzen, nichts überschreiben
+        const fill = MACHINE_FIELDS.filter((f) => (ex[f] == null || ex[f] === '' || (f === 'sold_by_us' && !ex[f])) && m[f] != null && m[f] !== '' && m[f] !== 0);
+        if (m.notes && ex.notes && !ex.notes.includes(m.notes)) { m.notes = ex.notes + '\n' + m.notes; fill.push('notes'); }
+        if (!fill.length) return;
+        run(`UPDATE machines SET ${fill.map((f) => f + '=?').join(',')}, updated_by=?, updated_at=datetime('now','localtime') WHERE id=?`, ...fill.map((f) => m[f]), req.user.id, ex.id);
+        L.syncMachineTask(ex.id);
+        updated++;
+        return;
+      }
+      const r = run(`INSERT INTO machines(customer_id, ${MACHINE_FIELDS.join(',')}, created_by, updated_by) VALUES(?, ${MACHINE_FIELDS.map(() => '?').join(',')}, ?, ?)`,
+        cid, ...MACHINE_FIELDS.map((f) => m[f]), req.user.id, req.user.id);
+      if (m.sold_by_us) run('UPDATE customers SET is_buyer=1 WHERE id=?', cid); // bei uns gekauft = kaufender Kunde
+      L.systemEntry(cid, req.user.id, `Maschine per Import hinzugefügt: ${L.machineName(m)}${m.serial ? ' (Nr. ' + m.serial + ')' : ''}`);
+      L.syncMachineTask(Number(r.lastInsertRowid));
+      created++;
+    });
+  });
+  res.json({ created, updated, newCustomers, skipped });
+});
+
 // ---------- Zeitleiste ----------
 function cleanTask(b, fallbackCustomerId) {
   const t = {

@@ -236,6 +236,36 @@ const U = require('../lib/util');
     await call('a', 'PUT', `/api/customers/${buyer}`, { street: 'Neue Straße 1' });
     assert.equal((await call('a', 'GET', `/api/customers/${buyer}`)).customer.geo_status, '', 'Adressänderung muss neu verorten');
 
+    // Maschinen-Import
+    await call('a', 'POST', '/api/customers', { first_name: 'Hans', last_name: 'Doppel', zip: '48727', city: 'Billerbeck' });
+    await call('a', 'POST', '/api/customers', { first_name: 'Hans', last_name: 'Doppel', zip: '48653', city: 'Coesfeld' });
+    const mws = XLSX.utils.aoa_to_sheet([
+      ['Kunde', 'Ort', 'Hersteller', 'Typ', 'Fgst-Nr.', 'BJ', 'Kaufdatum', 'Bei uns gekauft', 'Wartungsintervall', 'Letzte Wartung', 'Betriebsstunden'],
+      ['Karl Käufer', '', 'Stihl', 'MS 261', 'ST-1', 2022, '01.03.2022', 'ja', 'Jährlich', U.addMonths(U.today(), -11).split('-').reverse().join('.'), 55],
+      ['Käufer Karl', '', 'Husqvarna', 'Automower 435X', 'HU-9', 2023, '', '', '', '', ''],
+      ['Hans Doppel', 'Coesfeld', 'Kubota', 'L1-382', 'KB-77', 2018, '', '', '', '', ''],
+      ['Hans Doppel', '', 'John Deere', 'X350', 'JD-1', 2020, '', '', '', '', ''],
+      ['Neu Kunde', 'Havixbeck', 'Kärcher', 'KM 70', '', '', '', '', '', '', ''],
+      ['Karl Käufer', '', 'Stihl', 'MS 261', 'st 1', '', '', '', '', '', 'Kette neu'],
+    ]);
+    const mwb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(mwb, mws, 'M');
+    const mpv = await call('a', 'POST', '/api/import/machines/preview', XLSX.write(mwb, { type: 'buffer', bookType: 'xlsx' }), true);
+    assert.equal(mpv.rows[0].customer_id, buyer, 'Name-Zuordnung');
+    assert.equal(mpv.rows[1].customer_id, buyer, 'Nachname Vorname');
+    assert.ok(mpv.rows[2].customer_id && mpv.rows[2]._customer_name.includes('Coesfeld'), 'Ort trennt Namensgleiche');
+    assert.equal(mpv.rows[3]._candidates.length, 2, 'mehrdeutig');
+    assert.ok(!mpv.rows[4].customer_id && !mpv.rows[4]._candidates, 'unbekannt');
+    assert.equal(mpv.rows[0].serial, 'ST-1'); assert.equal(mpv.rows[0].year, 2022); assert.equal(mpv.rows[0].sold_by_us, 1);
+    mpv.rows[3].customer_id = mpv.rows[3]._candidates[0].id;
+    const mres = await call('a', 'POST', '/api/import/machines/commit', { rows: mpv.rows, createMissing: true });
+    assert.equal(mres.created, 5); assert.equal(mres.updated, 1, 'gleiche Seriennummer wird ergänzt'); assert.equal(mres.newCustomers, 1);
+    const bm = (await call('a', 'GET', `/api/customers/${buyer}`)).machines;
+    assert.equal(bm.length, 2);
+    const saw = bm.find((x) => x.serial === 'ST-1');
+    assert.equal(saw.next_service, U.addMonths(U.today(), 1), 'nächste Wartung aus letzter Wartung + Intervall');
+    assert.ok(saw.notes.includes('Betriebsstunden: 55'));
+    assert.equal((await call('a', 'GET', '/api/customers?q=KM%2070')).rows[0].last_name, 'Kunde');
+
     // Abwesenheiten
     const d1 = U.addDays(U.today(), 20); const d3 = U.addDays(U.today(), 22);
     const absId = (await call('k', 'POST', '/api/absences', { kind: 'urlaub', start_date: d1, end_date: d3, note: 'Mallorca' })).id;

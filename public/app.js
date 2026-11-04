@@ -703,6 +703,7 @@ async function viewCustomers(main) {
   main.innerHTML = `
     <div class="page-head"><h1>Kunden</h1>
       <button class="btn" id="c-import">${icon('upload')} Excel-Import</button>
+      <button class="btn" id="c-mimport">${icon('tool')} Maschinen-Import</button>
       <button class="btn" id="c-export" title="Exportiert die aktuell gefilterte Liste">${icon('download')} Export</button>
       <button class="btn primary" id="c-new">${icon('plus')} Kunde anlegen</button></div>
     <div class="card" style="margin-bottom:14px"><div class="tabs ctabs" id="c-contact">${CONTACT_TABS.map(([k, l]) => `<button data-c="${k}" class="${st.contact === k ? 'on' : ''}">${l} <span class="badge grey" data-cnt="${k || 'all'}"></span></button>`).join('')}</div></div>
@@ -792,6 +793,7 @@ async function viewCustomers(main) {
   $('#c-reset').onclick = () => { Object.assign(st, { ...CUST_DEFAULTS, contact: st.contact, sort: st.sort }); $('#c-q').value = ''; load(); };
   $('#c-new').onclick = () => openCustomerForm({}, (id) => { location.hash = '#/kunden/' + id; });
   $('#c-import').onclick = () => openImport(load);
+  $('#c-mimport').onclick = () => openMachineImport(load);
   $('#c-export').onclick = () => { location.href = '/api/customers/export.xlsx?' + new URLSearchParams(st); };
   if (window.innerWidth > 860) $('#c-q').focus();
   await load();
@@ -916,6 +918,79 @@ function openImport(reload) {
       m.close(); toast(`${res.created} Kunden neu angelegt${res.updated ? `, ${res.updated} vorhandene ergänzt` : ''}${res.skipped.length ? `, ${res.skipped.length} übersprungen` : ''}`);
       reload && reload();
     } catch (e) { fail(e); $('#imp-go', m.el).disabled = false; }
+  };
+}
+
+// ======================= Maschinen-Import =======================
+function openMachineImport(reload) {
+  const m = modal({
+    title: 'Maschinen aus Excel importieren', wide: true,
+    body: `<div>
+      <p>Jede Zeile = eine Maschine. Das CRM ordnet sie automatisch dem passenden Kunden zu – über <b>Kundennr.</b> (aus dem CRM-Export), <b>E-Mail</b>, <b>Telefon</b> oder <b>Name</b> (bei gleichen Namen zusätzlich PLZ/Ort). Erkannte Spalten u. a.: <i>Art, Marke/Hersteller, Modell/Typ, Seriennummer, Baujahr, Kaufdatum, Bei uns gekauft, Wartungsintervall, Letzte/Nächste Wartung, Betriebsstunden, Bemerkung</i>.</p>
+      <p><a href="/api/import/machines-template.xlsx">${icon('download')} Vorlage herunterladen</a></p>
+      <label class="files-drop" id="mi-drop" style="display:block;margin:16px 0">${icon('upload', 'lg')}<br>Excel-Datei hierher ziehen oder <u>auswählen</u><input type="file" id="mi-file" accept=".xlsx,.xls,.csv,.ods" hidden></label>
+      <div id="mi-preview"></div></div>`,
+    foot: `<span class="left"></span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="mi-go" disabled>Importieren</button>`,
+  });
+  let rows = [];
+  const draw = (mapping) => {
+    const ok = rows.filter((r) => !r._error);
+    const matched = ok.filter((r) => r.customer_id);
+    const amb = ok.filter((r) => !r.customer_id && r._candidates);
+    const none = ok.filter((r) => !r.customer_id && !r._candidates);
+    const unmapped = (mapping || []).filter((x) => !x.field).map((x) => x.column);
+    const status = (r, i) => r._error ? `<span class="chip red">${r._error}</span>`
+      : r.customer_id ? `<span class="chip ok" title="erkannt über ${esc(r._via || 'Auswahl')}">${icon('check')} ${esc(r._customer_name || '')}</span>${r._existing ? ' <span class="chip warn" title="Gleiche Seriennummer schon beim Kunden – wird nur ergänzt">vorhanden</span>' : ''} <button class="btn ghost sm" data-pick="${i}" title="anderen Kunden wählen">${icon('edit')}</button>`
+        : r._candidates ? `<select data-cand="${i}" class="sm" style="width:auto;max-width:240px"><option value="">${r._candidates.length} Kunden passen – bitte wählen</option>${r._candidates.map((c) => `<option value="${c.id}">${esc(c.name)} · ${esc(c.city)}</option>`).join('')}</select>`
+          : `<span class="chip red">kein Kunde gefunden</span> <button class="btn ghost sm" data-pick="${i}">zuordnen …</button>`;
+    $('#mi-preview', m.el).innerHTML = `
+      <div class="callout ${none.length || amb.length ? 'warn' : 'info'}"><b>${rows.length}</b> Zeilen gelesen: <b>${matched.length}</b> Maschinen einem Kunden zugeordnet${amb.length ? `, <b>${amb.length}</b> mit mehreren möglichen Kunden (bitte auswählen)` : ''}${none.length ? `, <b>${none.length}</b> ohne passenden Kunden` : ''}.
+        ${unmapped.length ? `<br>Nicht erkannte Spalten (werden ignoriert): ${unmapped.map(esc).join(', ')}` : ''}</div>
+      ${none.length ? `<label class="check" style="margin:10px 0"><input type="checkbox" id="mi-create"> <span>Nicht gefundene Kunden <b>neu anlegen</b> (sonst werden diese Zeilen übersprungen)</span></label>` : ''}
+      <div class="table-wrap" style="max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:6px;margin-top:10px"><table class="list"><thead><tr><th>Kunde in der Datei</th><th>Zugeordnet zu</th><th>Art</th><th>Marke</th><th>Modell</th><th>Seriennr.</th><th>Baujahr</th><th>Kauf</th><th>Nächste Wartung</th></tr></thead><tbody>
+      ${rows.slice(0, 500).map((r, i) => `<tr style="cursor:default"><td>${esc(r._label)}</td><td class="nowrap">${status(r, i)}</td><td>${esc(r.category)}</td><td>${esc(r.brand)}</td><td>${esc(r.model)}</td><td>${esc(r.serial)}</td><td>${r.year || ''}</td><td>${deDate(r.purchase_date)}</td><td>${deDate(r.next_service)}${r.service_interval ? ` <span class="muted small">${INTERVALS[r.service_interval]}</span>` : ''}</td></tr>`).join('')}
+      </tbody></table></div>${rows.length > 500 ? '<p class="muted small">Vorschau zeigt die ersten 500 Zeilen.</p>' : ''}`;
+    $$('[data-cand]', m.el).forEach((s) => s.onchange = () => {
+      const r = rows[Number(s.dataset.cand)]; const c = r._candidates.find((x) => x.id === Number(s.value));
+      if (c) { r.customer_id = c.id; r._customer_name = `${c.name} (${c.city})`; r._via = 'Auswahl'; draw(mapping); }
+    });
+    $$('[data-pick]', m.el).forEach((b) => b.onclick = () => {
+      const r = rows[Number(b.dataset.pick)];
+      const pm = modal({ title: `Kunde für „${esc([r.brand, r.model].filter(Boolean).join(' ') || r.category)}“ wählen`, body: `<p class="muted small">In der Datei: ${esc(r._label || '–')}</p><div id="mi-pick"></div>`, foot: '<span class="left"></span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="mi-pick-ok">Übernehmen</button>' });
+      const picker = customerPicker($('#mi-pick', pm.el), null);
+      setTimeout(() => $('#mi-pick input', pm.el)?.focus(), 50);
+      $('#mi-pick-ok', pm.el).onclick = () => {
+        const id = picker.get(); if (!id) return;
+        r.customer_id = id; r._customer_name = $('#mi-pick a', pm.el)?.textContent || 'gewählt'; r._via = 'Auswahl'; pm.close(); draw(mapping);
+      };
+    });
+    const cr = $('#mi-create', m.el);
+    const upd = () => { $('#mi-go', m.el).disabled = !(matched.length || (cr && cr.checked)); $('#mi-go', m.el).textContent = `${matched.length + (cr && cr.checked ? none.length : 0)} Maschinen importieren`; };
+    if (cr) cr.onchange = upd;
+    upd();
+  };
+  const handle = async (file) => {
+    if (!file) return;
+    try {
+      const res = await api('/import/machines/preview', { method: 'POST', raw: true, body: await file.arrayBuffer(), headers: { 'Content-Type': 'application/octet-stream' } });
+      rows = res.rows; draw(res.mapping);
+    } catch (e) { fail(e); }
+  };
+  $('#mi-file', m.el).onchange = (e) => handle(e.target.files[0]);
+  const drop = $('#mi-drop', m.el);
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = () => drop.classList.remove('over');
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('over'); handle(e.dataTransfer.files[0]); };
+  $('#mi-go', m.el).onclick = async () => {
+    const createMissing = !!$('#mi-create', m.el)?.checked;
+    const list = rows.filter((r) => !r._error && (r.customer_id || (createMissing && !r._candidates)));
+    $('#mi-go', m.el).disabled = true;
+    try {
+      const res = await api('/import/machines/commit', { method: 'POST', body: { rows: list, createMissing } });
+      m.close();
+      toast(`${res.created} Maschinen importiert${res.updated ? `, ${res.updated} vorhandene ergänzt` : ''}${res.newCustomers ? `, ${res.newCustomers} Kunden neu angelegt` : ''}${res.skipped.length ? `, ${res.skipped.length} übersprungen` : ''}`);
+      loadMeta(); reload && reload();
+    } catch (e) { fail(e); $('#mi-go', m.el).disabled = false; }
   };
 }
 
