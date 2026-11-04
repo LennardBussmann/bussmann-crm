@@ -452,6 +452,7 @@ app.post('/api/customers/:id/machines', auth, (req, res) => {
   const id = tx(() => {
     const r = run(`INSERT INTO machines(customer_id, ${MACHINE_FIELDS.join(',')}, created_by, updated_by) VALUES(?, ${MACHINE_FIELDS.map(() => '?').join(',')}, ?, ?)`,
       c.id, ...MACHINE_FIELDS.map((f) => m[f]), req.user.id, req.user.id);
+    run('UPDATE customers SET is_buyer=1 WHERE id=?', c.id); // Kunde mit Maschine = kaufender Kunde
     const id = Number(r.lastInsertRowid);
     L.systemEntry(c.id, req.user.id, `Maschine hinzugefügt: ${L.machineName(m)}${m.serial ? ' (Nr. ' + m.serial + ')' : ''}`);
     L.syncMachineTask(id);
@@ -609,7 +610,7 @@ app.post('/api/import/machines/commit', auth, (req, res) => {
       }
       const r = run(`INSERT INTO machines(customer_id, ${MACHINE_FIELDS.join(',')}, created_by, updated_by) VALUES(?, ${MACHINE_FIELDS.map(() => '?').join(',')}, ?, ?)`,
         cid, ...MACHINE_FIELDS.map((f) => m[f]), req.user.id, req.user.id);
-      if (m.sold_by_us) run('UPDATE customers SET is_buyer=1 WHERE id=?', cid); // bei uns gekauft = kaufender Kunde
+      run('UPDATE customers SET is_buyer=1 WHERE id=?', cid); // Kunde mit Maschine = kaufender Kunde
       L.systemEntry(cid, req.user.id, `Maschine per Import hinzugefügt: ${L.machineName(m)}${m.serial ? ' (Nr. ' + m.serial + ')' : ''}`);
       L.syncMachineTask(Number(r.lastInsertRowid));
       created++;

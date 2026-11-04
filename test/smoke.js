@@ -272,6 +272,7 @@ const U = require('../lib/util');
     const rpv = await call('a', 'POST', '/api/import/machines/preview', XLSX.write(rwb, { type: 'buffer', bookType: 'xlsx' }), true);
     const rres = await call('a', 'POST', '/api/import/machines/commit', { rows: rpv.rows });
     assert.equal(rres.created, 0, 'Re-Import legt nichts doppelt an'); assert.equal(rres.updated, 1);
+    assert.equal((await call('a', 'GET', `/api/customers/${kmCust}`)).customer?.is_buyer ?? (await call('a', 'GET', `/api/customers/${kmCust}`)).is_buyer, 1, 'Kunde mit Maschine = kaufend');
     let km = (await call('a', 'GET', `/api/customers/${kmCust}`)).machines;
     assert.equal(km.length, 1); assert.equal(km[0].category, 'Kehrmaschine');
     // vorhandene Doppelte zusammenführen
