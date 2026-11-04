@@ -178,6 +178,7 @@ const U = require('../lib/util');
     const third = await call('a', 'POST', '/api/users', { name: 'Tina Dritte', email: 'tina@test.de', password: 'geheim123' });
     await call('t', 'POST', '/api/login', { email: 'tina@test.de', password: 'geheim123' });
     const tid = (await call('a', 'POST', '/api/tasks', { kind: 'termin', title: 'Vorführung Mähwerk', due_date: U.addDays(U.today(), 3), due_time: '10:00', customer_id: buyer, participants: [kollege.id, third.id, me.user.id] })).id;
+    assert.deepEqual((await call('a', 'GET', '/api/customers?q=Coesfeld&contact=m1')).rows.map((r) => r.id), [buyer], 'neue Aufgabe zählt als Kontakt');
     let tk = await call('a', 'GET', `/api/tasks/${tid}`);
     assert.equal(tk.assigned_to, me.user.id);
     assert.deepEqual(tk.participant_ids.split(',').map(Number).sort(), [kollege.id, third.id].sort(), 'Zuständiger darf nicht doppelt Teilnehmer sein');

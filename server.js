@@ -208,7 +208,11 @@ function cleanCustomer(b) {
 
 const CUSTOMER_LIST_SQL = `SELECT c.*, o.name owner_name,
   (SELECT COUNT(*) FROM tasks t WHERE t.customer_id=c.id AND t.status='open') open_tasks,
-  (SELECT MAX(happened_at) FROM entries e WHERE e.customer_id=c.id AND e.kind<>'system') last_contact
+  (SELECT MAX(d) FROM (
+    SELECT happened_at d FROM entries e WHERE e.customer_id=c.id AND e.kind<>'system'
+    UNION ALL SELECT substr(replace(t.done_at,' ','T'),1,16) FROM tasks t WHERE t.customer_id=c.id AND t.status='done' AND t.done_at IS NOT NULL
+    UNION ALL SELECT substr(replace(t.created_at,' ','T'),1,16) FROM tasks t WHERE t.customer_id=c.id AND t.auto_visit=0 AND t.machine_id IS NULL
+  )) last_contact
   FROM customers c LEFT JOIN users o ON o.id=c.owner_id`;
 
 // Letzter Kontakt: Reiter-Grenzen (exklusiv: bis 1 Monat, 1–3, 3–6, über 6 Monate / nie)
