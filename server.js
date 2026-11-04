@@ -507,11 +507,17 @@ function findMachineDuplicates() {
     byCustomer.get(m.customer_id).push(m);
   }
   for (const list of byCustomer.values()) {
+    const same = (x, y) => sameMachine(x, y) && sameMachine(y, x);
+    const matches = new Map(list.map((x) => [x.id, list.filter((y) => y.id !== x.id && same(x, y)).map((y) => y.id)]));
     const used = new Set();
     for (const a of list) {
-      if (used.has(a.id)) continue;
-      const dups = list.filter((b) => b.id !== a.id && !used.has(b.id) && sameMachine(a, b) && sameMachine(b, a));
-      if (dups.length) { used.add(a.id); dups.forEach((d) => used.add(d.id)); groups.push({ keep: a, drop: dups }); }
+      if (used.has(a.id) || !matches.get(a.id).length) continue;
+      const ids = [a.id, ...matches.get(a.id)];
+      // nur zusammenführen, wenn die Gruppe eindeutig ist: jedes Mitglied passt genau zu den anderen der Gruppe
+      // (z. B. "nur Marke" passt zu zwei verschiedenen Maschinen dieser Marke -> unklar, nichts tun)
+      if (ids.some((id) => used.has(id) || matches.get(id).length !== ids.length - 1 || matches.get(id).some((o) => !ids.includes(o)))) continue;
+      ids.forEach((id) => used.add(id));
+      groups.push({ keep: a, drop: list.filter((x) => ids.includes(x.id) && x.id !== a.id) });
     }
   }
   return groups;

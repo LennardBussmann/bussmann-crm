@@ -288,6 +288,19 @@ const U = require('../lib/util');
     const k = km.find((x) => x.model === 'KM 70');
     assert.equal(k.category, 'Kehrmaschine'); assert.equal(k.service_interval, 'yearly'); assert.ok((k.notes || '').includes('Bürste neu'));
     assert.equal((await call('a', 'GET', '/api/machines/duplicates')).machines, 0);
+    // nur Marke (erster Import) + Marke mit Gerätetyp/Seriennr. (zweiter Import) = gleiche Maschine
+    await call('a', 'POST', `/api/customers/${kmCust}/machines`, { brand: 'Vogelsang' });
+    await call('a', 'POST', `/api/customers/${kmCust}/machines`, { brand: 'Vogelsang', category: 'VX136-105 Q', serial: 'BJB.3118.2881' });
+    // nur Marke, aber zwei verschiedene Maschinen dieser Marke -> unklar, bleibt stehen
+    await call('a', 'POST', `/api/customers/${kmCust}/machines`, { brand: 'Glanemann' });
+    await call('a', 'POST', `/api/customers/${kmCust}/machines`, { brand: 'Glanemann', category: 'Offener Kasten', serial: 'GL1' });
+    await call('a', 'POST', `/api/customers/${kmCust}/machines`, { brand: 'Glanemann', category: 'Abrollkipper', serial: 'GL2' });
+    assert.equal((await call('a', 'GET', '/api/machines/duplicates')).machines, 1);
+    await call('a', 'POST', '/api/machines/dedupe', {});
+    km = (await call('a', 'GET', `/api/customers/${kmCust}`)).machines;
+    const vg = km.filter((x) => x.brand === 'Vogelsang');
+    assert.equal(vg.length, 1); assert.equal(vg[0].serial, 'BJB.3118.2881'); assert.equal(vg[0].category, 'VX136-105 Q');
+    assert.equal(km.filter((x) => x.brand === 'Glanemann').length, 3);
 
     // Abwesenheiten
     const d1 = U.addDays(U.today(), 20); const d3 = U.addDays(U.today(), 22);
