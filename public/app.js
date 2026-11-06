@@ -1323,7 +1323,7 @@ async function viewSales(main) {
       <div class="btn-group"><button class="btn" data-mode="month">Monat</button><button class="btn" data-mode="year">Jahr</button></div>
       ${adm ? `<select id="s-user" style="width:auto"><option value="all">Alle Verkäufer</option>${userOptions(null)}</select>` : ''}
       <div class="grow"><span class="ico">${icon('search')}</span><input type="search" id="s-q" placeholder="Maschine, Seriennr., Kunde …"></div>
-      <a class="btn" id="s-xlsx">${icon('download')} Excel</a>
+      <a class="btn" id="s-pdf" target="_blank" rel="noopener">${icon('file')} PDF</a><a class="btn" id="s-xlsx">${icon('download')} Excel</a>
     </div>
     <div id="s-body"></div>`;
   const range = () => (st.mode === 'year' ? [`${st.y}-01-01`, `${st.y}-12-31`] : [`${st.y}-${pad2(st.m)}-01`, addDays(`${st.m === 12 ? st.y + 1 : st.y}-${pad2(st.m === 12 ? 1 : st.m + 1)}-01`, -1)]);
@@ -1333,6 +1333,7 @@ async function viewSales(main) {
     $$('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === st.mode));
     const qs = new URLSearchParams({ from, to, user: st.user, q: st.q });
     $('#s-xlsx').href = '/api/sales/export.xlsx?' + qs;
+    $('#s-pdf').href = '/api/sales/report.html?' + qs;
     const d = await api('/sales?' + qs);
     const s = d.summary;
     const rows = st.tab === 'lager' ? d.stock : d.rows.filter((r) => st.tab === 'all' || r.kind === st.tab);

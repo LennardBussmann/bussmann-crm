@@ -588,6 +588,74 @@ app.get('/api/sales/export.xlsx', auth, (req, res) => {
   const name = `verkaeufe_${req.query.from || ''}_${req.query.to || ''}.xlsx`.replace(/_+\.xlsx$/, '.xlsx');
   res.set('Content-Disposition', `attachment; filename="${name}"`).type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
 });
+/** Monatsbericht als druckfertige Seite (im Browser „Als PDF speichern“) */
+app.get('/api/sales/report.html', auth, (req, res) => {
+  const { rows, uid } = salesQuery(req.query, req.user);
+  const sum = salesSummary(rows);
+  const h = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const eur = (n) => (n == null ? '–' : n.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €');
+  const pct = (p) => (p == null ? '–' : String(p).replace('.', ',') + ' %');
+  const de = (d) => (d ? d.split('-').reverse().join('.') : '');
+  const MON = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
+  const from = U.isDate(req.query.from) ? req.query.from : ''; const to = U.isDate(req.query.to) ? req.query.to : '';
+  let period = `${de(from)} – ${de(to)}`;
+  if (from && to && from.slice(0, 7) === to.slice(0, 7) && from.endsWith('-01')) period = `${MON[Number(from.slice(5, 7)) - 1]} ${from.slice(0, 4)}`;
+  else if (from && to && from.endsWith('-01-01') && to === from.slice(0, 4) + '-12-31') period = `Jahr ${from.slice(0, 4)}`;
+  const who = uid ? (get('SELECT name FROM users WHERE id=?', uid)?.name || '') : 'alle Verkäufer';
+  const byUser = [];
+  if (!uid) {
+    const m = new Map();
+    for (const r of rows) { const k = r.user_id || 0; if (!m.has(k)) m.set(k, { name: r.user_name || '–', rows: [] }); m.get(k).rows.push(r); }
+    for (const x of m.values()) byUser.push({ name: x.name, ...salesSummary(x.rows) });
+    byUser.sort((a, b) => b.margin - a.margin);
+  }
+  const sales = rows.filter((r) => r.kind === 'verkauf').sort((a, b) => a.date.localeCompare(b.date));
+  const buys = rows.filter((r) => r.kind === 'einkauf').sort((a, b) => a.date.localeCompare(b.date));
+  const mach = (r) => `<b>${h([r.brand, r.model].filter(Boolean).join(' ') || r.category || 'Maschine')}</b>${r.category && (r.brand || r.model) ? ` <span class="m">${h(r.category)}</span>` : ''}<div class="m">${h([SALE_COND[r.condition], r.serial ? 'Nr. ' + r.serial : '', r.year ? 'Bj. ' + r.year : ''].filter(Boolean).join(' · '))}</div>`;
+  const party = (r) => h(r.customer_name || r.party || '') + (r.customer_city ? `<div class="m">${h(r.customer_city)}</div>` : '');
+  res.type('html').send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><title>Verkaufsbericht ${h(period)}</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:opsz,wdth,wght@6..12,75..100,400..900&display=swap" rel="stylesheet">
+<style>
+@page { size: A4 landscape; margin: 12mm 12mm 14mm; }
+* { box-sizing: border-box; }
+body { font-family: 'Nunito Sans', Arial, sans-serif; color: #2b2d2e; font-size: 10.5pt; margin: 0; padding: 18px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+header { display: flex; align-items: flex-end; justify-content: space-between; border-bottom: 3px solid #c0292f; padding-bottom: 10px; margin-bottom: 14px; }
+header img { height: 46px; } h1 { margin: 0; font-size: 20pt; font-stretch: 87.5%; } .sub { color: #6a6d6e; font-weight: 700; text-align: right; }
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+.kpi { border: 1px solid #ddd; border-radius: 6px; padding: 8px 12px; } .kpi .n { font-size: 16pt; font-weight: 900; font-stretch: 87.5%; } .kpi .l { color: #6a6d6e; font-size: 9pt; font-weight: 700; }
+.kpi.g { border-color: #9cc48a; background: #f3f9ef; }
+h2 { font-size: 12pt; margin: 16px 0 6px; color: #c0292f; break-after: avoid; page-break-after: avoid; }
+thead { display: table-header-group; }
+table { width: 100%; border-collapse: collapse; } th { text-align: left; font-size: 8.5pt; text-transform: uppercase; color: #6a6d6e; border-bottom: 1.5px solid #6a6d6e; padding: 4px 6px; }
+td { padding: 5px 6px; border-bottom: 1px solid #e4e4e4; vertical-align: top; } tr { page-break-inside: avoid; }
+.r { text-align: right; white-space: nowrap; } .m { color: #6a6d6e; font-size: 8.5pt; font-weight: 400; }
+tfoot td { border-top: 1.5px solid #6a6d6e; border-bottom: 0; font-weight: 800; }
+.neg { color: #a51e24; } footer { margin-top: 18px; color: #8a8d8e; font-size: 8pt; display: flex; justify-content: space-between; }
+.bar { position: fixed; top: 10px; right: 10px; } .bar button { font: inherit; font-weight: 700; padding: 8px 14px; border-radius: 6px; border: 0; background: #c0292f; color: #fff; cursor: pointer; }
+@media print { .bar { display: none; } body { padding: 0; } }
+</style></head><body>
+<div class="bar"><button onclick="window.print()">Drucken / als PDF speichern</button></div>
+<header><img src="/img/logo.png" alt=""><div><h1>Verkaufsbericht ${h(period)}</h1><div class="sub">${h(who)} · erstellt am ${de(U.today())} von ${h(req.user.name)}</div></div></header>
+<div class="kpis">
+  <div class="kpi"><div class="n">${sum.sales}</div><div class="l">Verkäufe</div></div>
+  <div class="kpi"><div class="n">${eur(sum.revenue)}</div><div class="l">Umsatz netto</div></div>
+  <div class="kpi g"><div class="n">${eur(sum.margin)}</div><div class="l">Deckungsbeitrag · ${pct(sum.margin_pct)}</div></div>
+  <div class="kpi"><div class="n">${sum.purchases} · ${eur(sum.purchase_sum)}</div><div class="l">Einkäufe (EK netto)</div></div>
+</div>
+${sum.missing_ek ? `<p class="m">Hinweis: Bei ${sum.missing_ek} ${sum.missing_ek > 1 ? 'Verkäufen' : 'Verkauf'} fehlt der Einkaufspreis – ${sum.missing_ek > 1 ? 'diese sind' : 'dieser ist'} im Deckungsbeitrag nicht enthalten.</p>` : ''}
+${byUser.length > 1 ? `<h2>Nach Verkäufer</h2><table><thead><tr><th>Verkäufer</th><th class="r">Verkäufe</th><th class="r">Umsatz</th><th class="r">Deckungsbeitrag</th><th class="r">DB %</th><th class="r">Einkäufe</th></tr></thead><tbody>
+${byUser.map((u) => `<tr><td>${h(u.name)}</td><td class="r">${u.sales}</td><td class="r">${eur(u.revenue)}</td><td class="r"><b>${eur(u.margin)}</b></td><td class="r">${pct(u.margin_pct)}</td><td class="r">${u.purchases ? `${u.purchases} · ${eur(u.purchase_sum)}` : '–'}</td></tr>`).join('')}</tbody></table>` : ''}
+<h2>Verkäufe (${sales.length})</h2>
+${sales.length ? `<table><thead><tr><th>Datum</th><th>Maschine</th><th>Kunde</th>${uid ? '' : '<th>Verkäufer</th>'}<th class="r">EK</th><th class="r">Nebenkosten</th><th class="r">VK</th><th class="r">Deckungsbeitrag</th><th class="r">DB %</th></tr></thead><tbody>
+${sales.map((r) => `<tr><td>${de(r.date)}</td><td>${mach(r)}</td><td>${party(r)}</td>${uid ? '' : `<td>${h(r.user_name || '')}</td>`}<td class="r">${eur(r.purchase_price)}</td><td class="r">${r.extra_costs ? eur(r.extra_costs) : ''}</td><td class="r">${eur(r.sale_price)}</td><td class="r ${r.margin < 0 ? 'neg' : ''}"><b>${eur(r.margin)}</b></td><td class="r">${pct(r.margin_pct)}</td></tr>`).join('')}</tbody>
+<tfoot><tr><td colspan="${uid ? 3 : 4}">Summe</td><td></td><td></td><td class="r">${eur(sum.revenue)}</td><td class="r">${eur(sum.margin)}</td><td class="r">${pct(sum.margin_pct)}</td></tr></tfoot></table>` : '<p class="m">Keine Verkäufe in diesem Zeitraum.</p>'}
+${buys.length ? `<h2>Einkäufe (${buys.length})</h2><table><thead><tr><th>Datum</th><th>Maschine</th><th>Gekauft von</th>${uid ? '' : '<th>Mitarbeiter</th>'}<th class="r">EK netto</th><th>Status</th></tr></thead><tbody>
+${buys.map((r) => `<tr><td>${de(r.date)}</td><td>${mach(r)}</td><td>${party(r)}</td>${uid ? '' : `<td>${h(r.user_name || '')}</td>`}<td class="r">${eur(r.purchase_price)}</td><td>${r.sold_by_sale ? 'verkauft' : 'im Lager'}</td></tr>`).join('')}</tbody>
+<tfoot><tr><td colspan="${uid ? 3 : 4}">Summe</td><td class="r">${eur(sum.purchase_sum)}</td><td></td></tr></tfoot></table>` : ''}
+<footer><span>Bussmann Land- &amp; Gartentechnik · alle Beträge netto</span><span>vertraulich – nur für den internen Gebrauch</span></footer>
+<script>document.fonts && document.fonts.ready.then(() => setTimeout(() => window.print(), 300));</script>
+</body></html>`);
+});
 app.get('/api/sales/:id', auth, (req, res) => {
   const s = get(`${SALE_SQL} WHERE s.id=?`, req.params.id);
   if (!s || !canSale(req.user, s)) return res.status(404).json({ error: 'Nicht gefunden' });

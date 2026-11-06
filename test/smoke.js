@@ -328,6 +328,8 @@ const U = require('../lib/util');
     const xwb = XLSX.read(Buffer.from(await xl.arrayBuffer()));
     const xrows = XLSX.utils.sheet_to_json(xwb.Sheets[xwb.SheetNames[0]], { header: 1 });
     assert.equal(xrows[0][14], 'Deckungsbeitrag'); assert.equal(xrows.length, 1 + 3 + 3);
+    const rep = await call('a', 'GET', `/api/sales/report.html?from=${mon}01&to=${mon}31`);
+    assert.ok(rep.includes('Verkaufsbericht') && rep.includes('36.500,00 €') && rep.includes('Fendt 211 Vario'));
 
     // Abwesenheiten
     const d1 = U.addDays(U.today(), 20); const d3 = U.addDays(U.today(), 22);
