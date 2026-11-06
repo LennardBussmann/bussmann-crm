@@ -303,6 +303,32 @@ const U = require('../lib/util');
     assert.equal(vg.length, 1); assert.equal(vg[0].serial, 'BJB.3118.2881'); assert.equal(vg[0].category, 'VX136-105 Q');
     assert.equal(km.filter((x) => x.brand === 'Glanemann').length, 3);
 
+    // Verkäufe & Einkäufe
+    const scust = (await call('a', 'POST', '/api/customers', { first_name: 'Vera', last_name: 'Verkauf', city: 'Nottuln' })).id;
+    const buy = await call('k', 'POST', '/api/sales', { kind: 'einkauf', condition: 'gebraucht', brand: 'Fendt', model: '211 Vario', serial: 'F-9', purchase_price: '30.000,00', party: 'Hof Meier' });
+    await assert.rejects(call('k', 'POST', '/api/sales', { kind: 'verkauf', brand: 'Stihl' }), /Verkaufspreis/);
+    const sale1 = await call('k', 'POST', '/api/sales', { kind: 'verkauf', purchase_id: buy.id, brand: 'Fendt', model: '211 Vario', serial: 'F-9', sale_price: '36.500', extra_costs: '500,00', customer_id: scust });
+    await call('a', 'POST', '/api/sales', { kind: 'verkauf', brand: 'Husqvarna', model: 'TS 142', purchase_price: 1800, sale_price: '2.400,00', customer_id: scust, user_id: kollege.id });
+    await call('a', 'POST', '/api/sales', { kind: 'verkauf', brand: 'Stihl', model: 'MS 261', purchase_price: 600, sale_price: 800, date: U.addMonths(U.today(), -2) });
+    const mon = U.today().slice(0, 8);
+    const sl = await call('a', 'GET', `/api/sales?from=${mon}01&to=${mon}31`);
+    assert.equal(sl.summary.sales, 2); assert.equal(sl.summary.revenue, 38900); assert.equal(sl.summary.margin, 6000 + 600);
+    assert.equal(sl.summary.purchases, 1); assert.equal(sl.summary.purchase_sum, 30000);
+    assert.equal(sl.rows.find((r) => r.id === sale1.id).purchase_price, 30000, 'EK aus Lager übernommen');
+    assert.equal(sl.stock.length, 0, 'verkaufter Einkauf ist nicht mehr im Lager');
+    assert.equal(sl.byUser.find((u) => u.user_id === kollege.id).margin, 6600);
+    const vm = (await call('a', 'GET', `/api/customers/${scust}`));
+    assert.equal(vm.machines.length, 2); assert.ok(vm.machines.every((m) => m.sold_by_us)); assert.equal((vm.customer || vm).is_buyer, 1);
+    // Mitarbeiter sieht nur eigene, Admin-Eintrag nicht änderbar
+    const own = await call('k', 'GET', '/api/sales?from=2000-01-01&to=2100-01-01');
+    assert.equal(own.rows.length, 3); assert.equal(own.byUser.length, 0);
+    const adminSale = (await call('a', 'GET', '/api/sales?from=2000-01-01&to=2100-01-01')).rows.find((r) => r.brand === 'Stihl');
+    await assert.rejects(call('k', 'PUT', `/api/sales/${adminSale.id}`, { sale_price: 1 }), /404/);
+    const xl = await fetch(`${base}/api/sales/export.xlsx?from=${mon}01&to=${mon}31`, { headers: { Cookie: jars.a } });
+    const xwb = XLSX.read(Buffer.from(await xl.arrayBuffer()));
+    const xrows = XLSX.utils.sheet_to_json(xwb.Sheets[xwb.SheetNames[0]], { header: 1 });
+    assert.equal(xrows[0][14], 'Deckungsbeitrag'); assert.equal(xrows.length, 1 + 3 + 3);
+
     // Abwesenheiten
     const d1 = U.addDays(U.today(), 20); const d3 = U.addDays(U.today(), 22);
     const absId = (await call('k', 'POST', '/api/absences', { kind: 'urlaub', start_date: d1, end_date: d3, note: 'Mallorca' })).id;

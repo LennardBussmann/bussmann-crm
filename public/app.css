@@ -433,3 +433,23 @@ button.chip.tagchip { border: 1px dashed var(--line-strong); cursor: pointer; fo
 .mi-map-grid label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mi-map-grid select { padding: 5px 8px; font-size: 13px; }
 .mi-map-grid select.unmapped { border-color: var(--warn); background: var(--warn-50); }
+
+/* Verkäufe */
+.period { display: inline-flex; align-items: center; gap: 6px; }
+.period b { min-width: 130px; text-align: center; font-size: 16px; }
+table.list th.num, table.list td.num { text-align: right; }
+table.list tfoot td { border-top: 2px solid var(--line); padding-top: 10px; padding-bottom: 10px; }
+table.list.plain tbody tr { cursor: default; }
+table.list.plain tbody tr[data-user] { cursor: pointer; }
+.chip.sale { background: #eaf3e3; color: #3f6b22; }
+.chip.buy { background: #e6eef7; color: #2a5a8a; }
+.pct { display: inline-block; font-size: 12px; font-weight: 800; padding: 1px 7px; border-radius: 10px; background: var(--line); color: var(--grey-dark); }
+.pct.pos { background: #eaf3e3; color: #3f6b22; } .pct.mid { background: #fff4d6; color: #8a6200; } .pct.neg { background: #fbe6e6; color: #a51e24; }
+.stat.good .ic { background: #eaf3e3; color: #3f6b22; }
+.money { position: relative; } .money input { padding-right: 28px; text-align: right; } .money span { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--muted); font-weight: 700; }
+.db-box { padding: 8px 12px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--line); min-height: 38px; display: flex; align-items: center; gap: 8px; font-size: 16px; }
+.db-box .neg { color: #a51e24; }
+@media (max-width: 860px) { .stat .num { font-size: 22px; } }
+.stats > .stat { min-width: 0; }
+.show-m-only { display: none; }
+@media (max-width: 860px) { .show-m-only { display: block; } table.list td .pct { margin-top: 3px; } }

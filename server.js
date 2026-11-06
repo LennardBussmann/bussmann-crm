@@ -488,6 +488,154 @@ app.delete('/api/machines/:id', auth, (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Verkäufe & Einkäufe (Deckungsbeitrag) ----------
+const XLSX = require('xlsx');
+/** "12.500,50 €" / "12500.5" / 12500 -> 12500.5 ; leer -> null */
+function money(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number') return Number.isFinite(v) ? Math.round(v * 100) / 100 : null;
+  let s = String(v).replace(/[€\s]/g, '');
+  if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
+  const n = Number(s);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : NaN;
+}
+const SALE_COND = { neu: 'Neu', gebraucht: 'Gebraucht', vorfuehr: 'Vorführmaschine' };
+const SALE_SQL = `SELECT s.*, u.name user_name,
+  NULLIF(TRIM(COALESCE(c.company,'') || CASE WHEN c.company<>'' AND (c.first_name<>'' OR c.last_name<>'') THEN ' – ' ELSE '' END || TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,''))), '') customer_name,
+  c.city customer_city,
+  (SELECT v.id FROM sales v WHERE v.purchase_id=s.id AND v.kind='verkauf' LIMIT 1) sold_by_sale
+  FROM sales s LEFT JOIN users u ON u.id=s.user_id LEFT JOIN customers c ON c.id=s.customer_id`;
+const saleCalc = (s) => {
+  if (s.kind !== 'verkauf') return { ...s, margin: null, margin_pct: null };
+  const margin = s.sale_price != null && s.purchase_price != null ? Math.round((s.sale_price - s.purchase_price - (s.extra_costs || 0)) * 100) / 100 : null;
+  return { ...s, margin, margin_pct: margin != null && s.sale_price ? Math.round((margin / s.sale_price) * 1000) / 10 : null };
+};
+const canSale = (u, s) => u.role === 'admin' || s.user_id === u.id || s.created_by === u.id;
+
+function cleanSale(b, user) {
+  const kind = b.kind === 'einkauf' ? 'einkauf' : 'verkauf';
+  const year = Number(b.year);
+  const s = {
+    kind, date: U.isDate(b.date) ? b.date : U.today(),
+    user_id: user.role === 'admin' && b.user_id && get('SELECT id FROM users WHERE id=?', b.user_id) ? Number(b.user_id) : user.id,
+    customer_id: b.customer_id && get('SELECT id FROM customers WHERE id=?', b.customer_id) ? Number(b.customer_id) : null,
+    party: U.str(b.party, 200) || '',
+    condition: SALE_COND[b.condition] ? b.condition : 'neu',
+    category: U.str(b.category, 60), brand: U.str(b.brand, 60), model: U.str(b.model, 100), serial: U.str(b.serial, 100),
+    year: Number.isInteger(year) && year > 1900 && year < 2200 ? year : null,
+    purchase_price: money(b.purchase_price), sale_price: kind === 'verkauf' ? money(b.sale_price) : null,
+    extra_costs: money(b.extra_costs) || 0,
+    purchase_id: kind === 'verkauf' && b.purchase_id ? Number(b.purchase_id) || null : null,
+    notes: U.str(b.notes, 5000) || '',
+  };
+  for (const [f, l] of [['purchase_price', 'Einkaufspreis'], ['sale_price', 'Verkaufspreis'], ['extra_costs', 'Nebenkosten']]) if (Number.isNaN(s[f])) return { error: `${l} ist keine gültige Zahl` };
+  if (!s.category && !s.brand && !s.model) return { error: 'Bitte mindestens Art, Marke oder Modell der Maschine angeben' };
+  if (kind === 'verkauf' && s.sale_price == null) return { error: 'Bitte den Verkaufspreis angeben' };
+  if (kind === 'einkauf' && s.purchase_price == null) return { error: 'Bitte den Einkaufspreis angeben' };
+  if (s.purchase_id) {
+    const p = get("SELECT * FROM sales WHERE id=? AND kind='einkauf'", s.purchase_id);
+    if (!p) s.purchase_id = null;
+    else if (s.purchase_price == null) s.purchase_price = p.purchase_price; // EK aus dem Einkauf übernehmen
+  }
+  return { s };
+}
+const SALE_FIELDS = ['kind', 'date', 'user_id', 'customer_id', 'party', 'condition', 'category', 'brand', 'model', 'serial', 'year', 'purchase_price', 'sale_price', 'extra_costs', 'purchase_id', 'notes'];
+
+function salesQuery(q, user) {
+  const where = []; const p = [];
+  if (U.isDate(q.from)) { where.push('s.date>=?'); p.push(q.from); }
+  if (U.isDate(q.to)) { where.push('s.date<=?'); p.push(q.to); }
+  const uid = user.role === 'admin' ? (q.user && q.user !== 'all' ? Number(q.user) : null) : user.id;
+  if (uid) { where.push('(s.user_id=? OR s.created_by=?)'); p.push(uid, uid); }
+  if (q.kind === 'verkauf' || q.kind === 'einkauf') { where.push('s.kind=?'); p.push(q.kind); }
+  if (q.q) { where.push("(s.brand || ' ' || s.model || ' ' || COALESCE(s.category,'') || ' ' || COALESCE(s.serial,'') || ' ' || s.party || ' ' || COALESCE(c.last_name,'') || ' ' || COALESCE(c.company,'')) LIKE ?"); p.push('%' + q.q + '%'); }
+  return { rows: all(`${SALE_SQL} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY s.date DESC, s.id DESC`, ...p).map(saleCalc), uid };
+}
+function salesSummary(rows) {
+  const v = rows.filter((r) => r.kind === 'verkauf'); const e = rows.filter((r) => r.kind === 'einkauf');
+  const sum = (a, f) => Math.round(a.reduce((n, r) => n + (r[f] || 0), 0) * 100) / 100;
+  const withMargin = v.filter((r) => r.margin != null);
+  const revenue = sum(v, 'sale_price'); const margin = sum(withMargin, 'margin');
+  const revM = sum(withMargin, 'sale_price');
+  return { sales: v.length, revenue, margin, margin_pct: revM ? Math.round((margin / revM) * 1000) / 10 : null, missing_ek: v.length - withMargin.length,
+    purchases: e.length, purchase_sum: sum(e, 'purchase_price') };
+}
+app.get('/api/sales', auth, (req, res) => {
+  const { rows, uid } = salesQuery(req.query, req.user);
+  const byUser = [];
+  if (!uid) {
+    const m = new Map();
+    for (const r of rows) { const k = r.user_id || 0; if (!m.has(k)) m.set(k, { user_id: r.user_id, name: r.user_name || '–', rows: [] }); m.get(k).rows.push(r); }
+    for (const x of m.values()) byUser.push({ user_id: x.user_id, name: x.name, ...salesSummary(x.rows) });
+    byUser.sort((a, b) => b.margin - a.margin);
+  }
+  // Lager: eigene Einkäufe, die noch nicht verkauft sind (unabhängig vom Zeitraum)
+  const stock = all(`${SALE_SQL} WHERE s.kind='einkauf' AND NOT EXISTS (SELECT 1 FROM sales v WHERE v.purchase_id=s.id AND v.kind='verkauf') ORDER BY s.date`).map(saleCalc);
+  res.json({ rows, summary: salesSummary(rows), byUser, stock, stock_value: Math.round(stock.reduce((n, r) => n + (r.purchase_price || 0), 0) * 100) / 100 });
+});
+app.get('/api/sales/export.xlsx', auth, (req, res) => {
+  const { rows } = salesQuery(req.query, req.user);
+  const head = ['Datum', 'Art', 'Verkäufer', 'Kunde / Lieferant', 'Ort', 'Maschinenart', 'Marke', 'Modell', 'Seriennummer', 'Baujahr', 'Zustand', 'EK netto', 'Nebenkosten', 'VK netto', 'Deckungsbeitrag', 'DB %', 'Notizen'];
+  const data = rows.map((r) => [r.date.split('-').reverse().join('.'), r.kind === 'verkauf' ? 'Verkauf' : 'Einkauf', r.user_name || '', r.customer_name || r.party || '', r.customer_city || '', r.category || '', r.brand || '', r.model || '', r.serial || '', r.year || '', SALE_COND[r.condition] || '',
+    r.purchase_price, r.kind === 'verkauf' ? r.extra_costs : null, r.sale_price, r.margin, r.margin_pct, r.notes]);
+  const s = salesSummary(rows);
+  data.push([], ['Summe Verkäufe', s.sales, '', '', '', '', '', '', '', '', '', '', '', s.revenue, s.margin, s.margin_pct], ['Summe Einkäufe', s.purchases, '', '', '', '', '', '', '', '', '', s.purchase_sum]);
+  const ws = XLSX.utils.aoa_to_sheet([head, ...data]);
+  ws['!cols'] = head.map((h, i) => ({ wch: [10, 9, 16, 26, 14, 16, 14, 16, 16, 8, 12, 12, 12, 12, 15, 7, 30][i] }));
+  for (let r = 1; r <= data.length; r++) for (const c of [11, 12, 13, 14]) { const cell = ws[XLSX.utils.encode_cell({ r, c })]; if (cell && typeof cell.v === 'number') cell.z = '#,##0.00 €'; }
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Verkäufe');
+  const name = `verkaeufe_${req.query.from || ''}_${req.query.to || ''}.xlsx`.replace(/_+\.xlsx$/, '.xlsx');
+  res.set('Content-Disposition', `attachment; filename="${name}"`).type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+});
+app.get('/api/sales/:id', auth, (req, res) => {
+  const s = get(`${SALE_SQL} WHERE s.id=?`, req.params.id);
+  if (!s || !canSale(req.user, s)) return res.status(404).json({ error: 'Nicht gefunden' });
+  res.json(saleCalc(s));
+});
+/** Verkauf an einen Kunden: Maschine beim Kunden anlegen (bzw. vorhandene ergänzen), Kunde wird kaufender Kunde */
+function machineFromSale(s, userId) {
+  if (s.kind !== 'verkauf' || !s.customer_id) return null;
+  const m = { category: s.category, brand: s.brand, model: s.model, serial: s.serial, year: s.year, purchase_date: s.date, sold_by_us: 1 };
+  const ex = s.serial ? all('SELECT * FROM machines WHERE customer_id=?', s.customer_id).find((x) => ns(x.serial) && ns(x.serial) === ns(s.serial)) : null;
+  run('UPDATE customers SET is_buyer=1 WHERE id=?', s.customer_id);
+  if (ex) { run("UPDATE machines SET sold_by_us=1, purchase_date=COALESCE(purchase_date, ?), updated_at=datetime('now','localtime') WHERE id=?", s.date, ex.id); return ex.id; }
+  const r = run(`INSERT INTO machines(customer_id, category, brand, model, serial, year, purchase_date, sold_by_us, created_by, updated_by) VALUES(?,?,?,?,?,?,?,1,?,?)`,
+    s.customer_id, m.category, m.brand, m.model, m.serial, m.year, m.purchase_date, userId, userId);
+  L.systemEntry(s.customer_id, userId, `Maschine verkauft: ${L.machineName(m)}${m.serial ? ' (Nr. ' + m.serial + ')' : ''}`);
+  return Number(r.lastInsertRowid);
+}
+app.post('/api/sales', auth, (req, res) => {
+  const { s, error } = cleanSale(req.body || {}, req.user);
+  if (error) return bad(res, error);
+  const id = tx(() => {
+    const r = run(`INSERT INTO sales(${SALE_FIELDS.join(',')}, created_by) VALUES(${SALE_FIELDS.map(() => '?').join(',')}, ?)`, ...SALE_FIELDS.map((f) => s[f]), req.user.id);
+    const id = Number(r.lastInsertRowid);
+    if (req.body.add_machine !== false) { const mid = machineFromSale(s, req.user.id); if (mid) run('UPDATE sales SET machine_id=? WHERE id=?', mid, id); }
+    return id;
+  });
+  res.json({ id });
+});
+app.put('/api/sales/:id', auth, (req, res) => {
+  const old = get('SELECT * FROM sales WHERE id=?', req.params.id);
+  if (!old || !canSale(req.user, old)) return res.status(404).json({ error: 'Nicht gefunden' });
+  const { s, error } = cleanSale({ user_id: old.user_id, ...req.body }, req.user);
+  if (error) return bad(res, error);
+  if (req.user.role !== 'admin') s.user_id = old.user_id;
+  if (s.purchase_id === old.id) s.purchase_id = null;
+  tx(() => {
+    run(`UPDATE sales SET ${SALE_FIELDS.map((f) => f + '=?').join(',')}, updated_at=datetime('now','localtime') WHERE id=?`, ...SALE_FIELDS.map((f) => s[f]), old.id);
+    if (!old.machine_id && req.body.add_machine) { const mid = machineFromSale(s, req.user.id); if (mid) run('UPDATE sales SET machine_id=? WHERE id=?', mid, old.id); }
+  });
+  res.json({ ok: true });
+});
+app.delete('/api/sales/:id', auth, (req, res) => {
+  const old = get('SELECT * FROM sales WHERE id=?', req.params.id);
+  if (!old || !canSale(req.user, old)) return res.status(404).json({ error: 'Nicht gefunden' });
+  run('DELETE FROM sales WHERE id=?', old.id); // Maschine beim Kunden bleibt bestehen
+  res.json({ ok: true });
+});
+
 // ---------- Doppelte Maschinen ----------
 const ns = (s) => importer.normSerial(s);
 /** Gleiche Maschine? Seriennummer gleich – oder ohne Seriennummer: gleiche Marke + Modell (+ Art/Baujahr, wenn beide gesetzt) */

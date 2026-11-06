@@ -148,6 +148,8 @@ const ICONS = {
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
   link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  euro: '<path d="M17.5 6.2A7 7 0 1 0 17.5 17.8"/><path d="M4 10h9M4 14h9"/>',
+  box: '<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
 };
 const icon = (n, cls = '') => `<svg class="ico ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ICONS.dot}</svg>`;
 const ENTRY_ICON = { besuch: 'car', telefonat: 'phone', email: 'mail', termin: 'cal', notiz: 'note', sonstiges: 'dot', system: 'info' };
@@ -283,7 +285,7 @@ function route() {
   const main = $('#main');
   main.innerHTML = '<div class="empty">Lädt …</div>';
   window.scrollTo(0, 0);
-  const views = { '': viewDashboard, start: viewDashboard, kunden: p1 ? () => viewCustomer(Number(p1)) : viewCustomers, aufgaben: viewTasks, kalender: viewCalendar, karte: viewMap, einstellungen: viewSettings };
+  const views = { '': viewDashboard, start: viewDashboard, kunden: p1 ? () => viewCustomer(Number(p1)) : viewCustomers, aufgaben: viewTasks, kalender: viewCalendar, karte: viewMap, verkaeufe: viewSales, einstellungen: viewSettings };
   (views[p0] || viewDashboard)(main).catch(fail);
   if (p0 === 'aufgaben' && p1) openTask(Number(p1));
 }
@@ -360,7 +362,7 @@ function renderSetup() {
 
 // ======================= Grundgerüst =======================
 function renderShell() {
-  const nav = [['start', 'home', 'Übersicht'], ['kunden', 'users', 'Kunden'], ['karte', 'map', 'Karte'], ['aufgaben', 'tasks', 'Aufgaben'], ['kalender', 'cal', 'Kalender'], ['einstellungen', 'gear', 'Einstellungen']];
+  const nav = [['start', 'home', 'Übersicht'], ['kunden', 'users', 'Kunden'], ['karte', 'map', 'Karte'], ['aufgaben', 'tasks', 'Aufgaben'], ['kalender', 'cal', 'Kalender'], ['verkaeufe', 'euro', 'Verkäufe'], ['einstellungen', 'gear', 'Einstellungen']];
   $('#app').innerHTML = `<div class="shell">
     <header class="topbar">
       <a class="brand" href="#/"><img src="img/logo.png" alt="Bussmann Land- & Gartentechnik"></a>
@@ -1298,6 +1300,157 @@ async function openMachineForm(m, onSaved) {
   if (isEdit) $('#mf-del', md.el).onclick = async () => {
     if (!(await confirmBox('Diese Maschine beim Kunden entfernen? Offene Wartungsaufgaben werden mit gelöscht.', 'Entfernen'))) return;
     try { await api('/machines/' + m.id, { method: 'DELETE' }); md.close(); toast('Maschine entfernt'); onSaved && onSaved(); } catch (e) { fail(e); }
+  };
+}
+
+// ======================= Verkäufe & Einkäufe =======================
+const SALE_COND = { neu: 'Neu', gebraucht: 'Gebraucht', vorfuehr: 'Vorführmaschine' };
+const pad2 = (n) => String(n).padStart(2, '0');
+const eur = (n) => (n == null ? '–' : Number(n).toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: Math.abs(n) >= 1000 ? 0 : 2 }));
+const eur2 = (n) => (n == null ? '' : Number(n).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+const parseEur = (v) => { let s = String(v ?? '').replace(/[€\s]/g, ''); if (!s) return null; if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.'); else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, ''); const n = Number(s); return Number.isFinite(n) ? n : null; };
+const saleMachine = (r) => [r.brand, r.model].filter(Boolean).join(' ') || r.category || 'Maschine';
+const pctCls = (p) => (p == null ? '' : p < 5 ? 'neg' : p < 12 ? 'mid' : 'pos');
+
+async function viewSales(main) {
+  const adm = state.me.role === 'admin';
+  const now = todayISO();
+  const st = { mode: sessionStorage.getItem('sMode') || 'month', y: Number(now.slice(0, 4)), m: Number(now.slice(5, 7)), user: 'all', tab: 'all', q: '' };
+  main.innerHTML = `
+    <div class="page-head"><h1>Verkäufe</h1><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="s-buy">${icon('box')} Einkauf erfassen</button><button class="btn primary" id="s-new">${icon('plus')} Verkauf erfassen</button></div></div>
+    <div class="toolbar">
+      <div class="period"><button class="btn icon" id="s-prev" title="Zurück">${icon('left')}</button><b id="s-label"></b><button class="btn icon" id="s-next" title="Weiter">${icon('right')}</button></div>
+      <div class="btn-group"><button class="btn" data-mode="month">Monat</button><button class="btn" data-mode="year">Jahr</button></div>
+      ${adm ? `<select id="s-user" style="width:auto"><option value="all">Alle Verkäufer</option>${userOptions(null)}</select>` : ''}
+      <div class="grow"><span class="ico">${icon('search')}</span><input type="search" id="s-q" placeholder="Maschine, Seriennr., Kunde …"></div>
+      <a class="btn" id="s-xlsx">${icon('download')} Excel</a>
+    </div>
+    <div id="s-body"></div>`;
+  const range = () => (st.mode === 'year' ? [`${st.y}-01-01`, `${st.y}-12-31`] : [`${st.y}-${pad2(st.m)}-01`, addDays(`${st.m === 12 ? st.y + 1 : st.y}-${pad2(st.m === 12 ? 1 : st.m + 1)}-01`, -1)]);
+  const load = async () => {
+    const [from, to] = range();
+    $('#s-label').textContent = st.mode === 'year' ? String(st.y) : `${MONTHS[st.m - 1]} ${st.y}`;
+    $$('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === st.mode));
+    const qs = new URLSearchParams({ from, to, user: st.user, q: st.q });
+    $('#s-xlsx').href = '/api/sales/export.xlsx?' + qs;
+    const d = await api('/sales?' + qs);
+    const s = d.summary;
+    const rows = st.tab === 'lager' ? d.stock : d.rows.filter((r) => st.tab === 'all' || r.kind === st.tab);
+    const lbl = st.mode === 'year' ? `im Jahr ${st.y}` : `im ${MONTHS[st.m - 1]}`;
+    $('#s-body').innerHTML = `
+      <div class="stats">
+        <div class="card stat" data-tab="verkauf"><div class="ic">${icon('euro', 'lg')}</div><div><div class="num">${s.sales}</div><div class="lbl">Verkäufe ${lbl}</div></div></div>
+        <div class="card stat" data-tab="verkauf"><div class="ic">${icon('offer', 'lg')}</div><div><div class="num">${eur(s.revenue)}</div><div class="lbl">Umsatz netto</div></div></div>
+        <div class="card stat good" data-tab="verkauf"><div class="ic">${icon('check', 'lg')}</div><div><div class="num">${eur(s.margin)}</div><div class="lbl">Deckungsbeitrag${s.margin_pct != null ? ` · ${String(s.margin_pct).replace('.', ',')} %` : ''}</div></div></div>
+        <div class="card stat" data-tab="lager"><div class="ic">${icon('box', 'lg')}</div><div><div class="num">${d.stock.length}</div><div class="lbl">Im Lager · ${eur(d.stock_value)} EK</div></div></div>
+      </div>
+      ${s.missing_ek ? `<div class="callout warn" style="margin-bottom:14px">${icon('info')} Bei ${s.missing_ek} Verkauf${s.missing_ek > 1 ? 'en' : ''} fehlt der Einkaufspreis – dort kann kein Deckungsbeitrag berechnet werden.</div>` : ''}
+      ${adm && d.byUser.length > 1 ? `<div class="card" style="margin-bottom:14px"><div class="card-head"><h2>Nach Verkäufer</h2></div><div class="table-wrap"><table class="list plain"><thead><tr><th>Verkäufer</th><th class="num">Verkäufe</th><th class="num hide-m">Umsatz</th><th class="num">Deckungsbeitrag</th><th class="num hide-m">DB %</th><th class="num hide-m">Einkäufe</th></tr></thead><tbody>
+        ${d.byUser.map((u) => `<tr data-user="${u.user_id || ''}"><td>${avatar(u.name, u.user_id, 'xs')} ${esc(u.name)}</td><td class="num">${u.sales}</td><td class="num hide-m">${eur(u.revenue)}</td><td class="num"><b>${eur(u.margin)}</b></td><td class="num hide-m"><span class="pct ${pctCls(u.margin_pct)}">${u.margin_pct != null ? String(u.margin_pct).replace('.', ',') + ' %' : '–'}</span></td><td class="num hide-m">${u.purchases ? `${u.purchases} · ${eur(u.purchase_sum)}` : '–'}</td></tr>`).join('')}</tbody></table></div></div>` : ''}
+      <div class="card">
+        <div class="card-head" style="gap:10px;flex-wrap:wrap"><div class="btn-group">${[['all', 'Alle'], ['verkauf', `Verkäufe (${s.sales})`], ['einkauf', `Einkäufe (${s.purchases})`], ['lager', `Lager (${d.stock.length})`]].map(([k, l]) => `<button class="btn sm ${st.tab === k ? 'on' : ''}" data-t="${k}">${l}</button>`).join('')}</div>
+          ${st.tab === 'lager' ? '<span class="muted small">Eingekaufte Maschinen, die noch nicht verkauft sind (unabhängig vom Zeitraum)</span>' : ''}</div>
+        ${rows.length ? `<div class="table-wrap"><table class="list"><thead><tr><th class="hide-m">Datum</th><th>Maschine</th><th class="hide-m">Kunde / Lieferant</th>${adm ? '<th class="hide-m">Verkäufer</th>' : ''}<th class="num hide-m">EK</th><th class="num hide-m">VK</th><th class="num">DB</th></tr></thead><tbody>
+          ${rows.map((r) => `<tr data-sid="${r.id}">
+            <td class="nowrap hide-m">${deDate(r.date)}<div>${r.kind === 'verkauf' ? '<span class="chip sale">Verkauf</span>' : `<span class="chip buy">Einkauf</span>${r.sold_by_sale ? ' <span class="chip">verkauft</span>' : ''}`}</div></td>
+            <td><div class="show-m-only small muted">${deDate(r.date)} · ${r.kind === 'verkauf' ? 'Verkauf' : 'Einkauf'}${r.customer_name || r.party ? ' · ' + esc(r.customer_name || r.party) : ''}</div><b>${esc(saleMachine(r))}</b>${r.category && (r.brand || r.model) ? ` <span class="chip">${esc(r.category)}</span>` : ''}<div class="muted small">${[SALE_COND[r.condition], r.serial ? 'Nr. ' + esc(r.serial) : '', r.year ? 'Bj. ' + r.year : ''].filter(Boolean).join(' · ')}</div></td>
+            <td class="hide-m">${r.customer_id ? `<a href="#/kunden/${r.customer_id}" onclick="event.stopPropagation()">${esc(r.customer_name || 'Kunde')}</a>` : esc(r.party || '')}${r.customer_city ? `<div class="muted small">${esc(r.customer_city)}</div>` : ''}</td>
+            ${adm ? `<td class="hide-m">${r.user_name ? `${avatar(r.user_name, r.user_id, 'xs')} ${esc(r.user_name)}` : ''}</td>` : ''}
+            <td class="num nowrap hide-m">${eur(r.purchase_price)}${r.extra_costs ? `<div class="muted small">+ ${eur(r.extra_costs)} NK</div>` : ''}</td>
+            <td class="num nowrap hide-m">${r.kind === 'verkauf' ? eur(r.sale_price) : ''}</td>
+            <td class="num nowrap">${r.kind === 'verkauf' ? (r.margin != null ? `<b>${eur(r.margin)}</b><span class="show-m-only muted small">von ${eur(r.sale_price)}</span> <span class="pct ${pctCls(r.margin_pct)}">${String(r.margin_pct).replace('.', ',')} %</span>` : '<span class="muted small">EK fehlt</span>') : ''}</td>
+          </tr>`).join('')}</tbody>
+          ${st.tab !== 'lager' && st.tab !== 'einkauf' && s.sales ? `<tfoot><tr><td class="hide-m"></td><td><b>Summe Verkäufe</b></td><td class="hide-m" colspan="${adm ? 3 : 2}"></td><td class="num nowrap hide-m"><b>${eur(s.revenue)}</b></td><td class="num nowrap"><b>${eur(s.margin)}</b></td></tr></tfoot>` : ''}</table></div>`
+          : `<div class="empty">${st.tab === 'lager' ? 'Keine Maschinen im Lager. Mit „Einkauf erfassen“ legen Sie eingekaufte Maschinen an.' : `Keine Einträge ${lbl}. Mit „Verkauf erfassen“ geht es los.`}</div>`}
+      </div>`;
+    $$('[data-t]').forEach((b) => b.onclick = () => { st.tab = b.dataset.t; load(); });
+    $$('.stat[data-tab]').forEach((b) => b.onclick = () => { st.tab = b.dataset.tab; load(); });
+    $$('tr[data-user]').forEach((tr) => tr.onclick = () => { if (!tr.dataset.user) return; st.user = tr.dataset.user; $('#s-user').value = st.user; load(); });
+    $$('tr[data-sid]').forEach((tr) => tr.onclick = async () => openSaleForm(await api('/sales/' + tr.dataset.sid), load));
+  };
+  const shift = (n) => { if (st.mode === 'year') st.y += n; else { st.m += n; if (st.m < 1) { st.m = 12; st.y--; } if (st.m > 12) { st.m = 1; st.y++; } } load(); };
+  $('#s-prev').onclick = () => shift(-1); $('#s-next').onclick = () => shift(1);
+  $$('[data-mode]').forEach((b) => b.onclick = () => { st.mode = b.dataset.mode; sessionStorage.setItem('sMode', st.mode); load(); });
+  if (adm) $('#s-user').onchange = (e) => { st.user = e.target.value; load(); };
+  $('#s-q').oninput = debounce((e) => { st.q = e.target.value; load(); });
+  $('#s-new').onclick = () => openSaleForm({ kind: 'verkauf' }, load);
+  $('#s-buy').onclick = () => openSaleForm({ kind: 'einkauf' }, load);
+  await load();
+}
+
+async function openSaleForm(s, onSaved) {
+  const isEdit = !!s.id; const adm = state.me.role === 'admin';
+  const meta = state.meta || await loadMeta();
+  const cats = [...new Set([...MACHINE_CATS, ...meta.categories])];
+  let stock = [];
+  try { stock = (await api('/sales?from=1900-01-01&to=1900-01-01')).stock; } catch { /* egal */ }
+  const md = modal({
+    title: isEdit ? (s.kind === 'einkauf' ? 'Einkauf bearbeiten' : 'Verkauf bearbeiten') : (s.kind === 'einkauf' ? 'Einkauf erfassen' : 'Verkauf erfassen'),
+    wide: true,
+    body: `<form id="sf"><div class="form-grid">
+      <div class="field"><label>Art</label><div class="btn-group" id="sf-kind"><button type="button" class="btn" data-k="verkauf">Verkauf</button><button type="button" class="btn" data-k="einkauf">Einkauf</button></div></div>
+      <div class="field"><label>Datum <span class="req">*</span></label><input type="date" name="date" value="${esc(s.date || todayISO())}" required></div>
+      <div class="field"><label data-v="Verkäufer" data-e="Eingekauft von (Mitarbeiter)">Verkäufer</label>${adm ? `<select name="user_id">${userOptions(s.user_id || state.me.id)}</select>` : `<input type="text" value="${esc(s.user_name || state.me.name)}" disabled>`}</div>
+      <div class="field"><label>Zustand</label><select name="condition">${Object.entries(SALE_COND).map(([k, v]) => `<option value="${k}" ${(s.condition || 'neu') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      <div class="field full"><label data-v="Kunde (Käufer)" data-e="Gekauft von (Kunde oder Lieferant)">Kunde</label><div id="sf-cust"></div>
+        <input type="text" name="party" value="${esc(s.party || '')}" placeholder="… oder Name eintragen, wenn nicht im CRM (z. B. Händler, Hersteller)" style="margin-top:6px"></div>
+      <div class="field full only-v" ${stock.length ? '' : 'hidden'}><label>Aus dem Lager <span class="muted">(eigener Einkauf – übernimmt Maschine und EK)</span></label><select name="purchase_id"><option value="">– nicht aus dem Lager –</option>${stock.concat(s.purchase_id && !stock.some((x) => x.id === s.purchase_id) ? [{ id: s.purchase_id, brand: 'bisheriger Einkauf', date: '' }] : []).map((x) => `<option value="${x.id}" ${s.purchase_id === x.id ? 'selected' : ''}>${esc(saleMachine(x))}${x.serial ? ' · Nr. ' + esc(x.serial) : ''}${x.purchase_price != null ? ' · EK ' + eur(x.purchase_price) : ''}${x.date ? ' · ' + deDate(x.date) : ''}</option>`).join('')}</select></div>
+      <div class="field"><label>Maschinenart</label><input type="text" name="category" list="sf-cats" value="${esc(s.category || '')}" placeholder="z. B. Traktor"><datalist id="sf-cats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></div>
+      <div class="field"><label>Marke / Hersteller</label><input type="text" name="brand" list="sf-brands" value="${esc(s.brand || '')}"><datalist id="sf-brands">${meta.brands.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></div>
+      <div class="field"><label>Modell / Typ</label><input type="text" name="model" value="${esc(s.model || '')}"></div>
+      <div class="field"><label>Seriennummer</label><input type="text" name="serial" value="${esc(s.serial || '')}"></div>
+      <div class="field"><label>Baujahr</label><input type="number" name="year" min="1950" max="2100" value="${esc(s.year || '')}"></div>
+      <div class="field"></div>
+      <div class="field"><label>Einkaufspreis netto (EK)<span class="req only-e"> *</span></label><div class="money"><input type="text" inputmode="decimal" name="purchase_price" value="${eur2(s.purchase_price)}" placeholder="0,00"><span>€</span></div></div>
+      <div class="field only-v"><label>Nebenkosten <span class="muted">(Überführung, Aufbereitung …)</span></label><div class="money"><input type="text" inputmode="decimal" name="extra_costs" value="${s.extra_costs ? eur2(s.extra_costs) : ''}" placeholder="0,00"><span>€</span></div></div>
+      <div class="field only-v"><label>Verkaufspreis netto (VK) <span class="req">*</span></label><div class="money"><input type="text" inputmode="decimal" name="sale_price" value="${eur2(s.sale_price)}" placeholder="0,00"><span>€</span></div></div>
+      <div class="field only-v"><label>Deckungsbeitrag</label><div class="db-box" id="sf-db">–</div></div>
+      <div class="field full"><label>Notizen</label><textarea name="notes" rows="2" placeholder="z. B. Inzahlungnahme, Finanzierung, Zubehör">${esc(s.notes || '')}</textarea></div>
+      ${s.machine_id ? '' : `<div class="field full only-v"><label class="check"><input type="checkbox" name="add_machine" ${isEdit ? '' : 'checked'}> Maschine beim Kunden unter „Maschinen“ eintragen (als „bei uns gekauft“, Kunde wird kaufender Kunde)</label></div>`}
+    </div></form>`,
+    foot: `<span class="left">${isEdit ? `<button class="btn danger" id="sf-del">${icon('trash')} Löschen</button>` : ''}</span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="sf-save">Speichern</button>`,
+  });
+  let kind = s.kind || 'verkauf';
+  const f = $('#sf', md.el);
+  const picker = customerPicker($('#sf-cust', md.el), s.customer_id ? { id: s.customer_id, name: s.customer_name || 'Kunde' } : null);
+  const calc = () => {
+    const ek = parseEur(f.purchase_price.value); const vk = parseEur(f.sale_price.value); const nk = parseEur(f.extra_costs.value) || 0;
+    const box = $('#sf-db', md.el);
+    if (ek == null || vk == null) { box.innerHTML = '<span class="muted">EK und VK eintragen</span>'; return; }
+    const db = vk - ek - nk; const p = vk ? Math.round((db / vk) * 1000) / 10 : null;
+    box.innerHTML = `<b class="${db < 0 ? 'neg' : ''}">${eur(db)}</b>${p != null ? ` <span class="pct ${pctCls(p)}">${String(p).replace('.', ',')} %</span>` : ''}`;
+  };
+  const setKind = (k) => {
+    kind = k;
+    $$('[data-k]', md.el).forEach((b) => b.classList.toggle('on', b.dataset.k === k));
+    $$('.only-v', md.el).forEach((el) => { el.style.display = k === 'verkauf' && !(el.hasAttribute('hidden')) ? '' : 'none'; });
+    $$('.only-e', md.el).forEach((el) => { el.style.display = k === 'einkauf' ? '' : 'none'; });
+    $$('label[data-v]', md.el).forEach((l) => { l.textContent = k === 'verkauf' ? l.dataset.v : l.dataset.e; });
+    $('.modal-head h2', md.el).textContent = `${k === 'einkauf' ? 'Einkauf' : 'Verkauf'} ${isEdit ? 'bearbeiten' : 'erfassen'}`;
+  };
+  $$('[data-k]', md.el).forEach((b) => b.onclick = () => setKind(b.dataset.k));
+  setKind(kind);
+  ['purchase_price', 'sale_price', 'extra_costs'].forEach((n) => f[n].addEventListener('input', calc)); calc();
+  f.purchase_id.onchange = () => {
+    const x = stock.find((y) => y.id === Number(f.purchase_id.value)); if (!x) return;
+    for (const k of ['category', 'brand', 'model', 'serial', 'year']) if (x[k]) f[k].value = x[k];
+    if (x.purchase_price != null) f.purchase_price.value = eur2(x.purchase_price);
+    if (x.condition) f.condition.value = x.condition === 'neu' ? 'neu' : x.condition;
+    calc();
+  };
+  $('#sf-save', md.el).onclick = async () => {
+    if (!f.reportValidity()) return;
+    const body = { ...formData(f), kind, customer_id: picker.get() };
+    if (body.add_machine === undefined) body.add_machine = false;
+    try {
+      if (isEdit) await api('/sales/' + s.id, { method: 'PUT', body });
+      else await api('/sales', { method: 'POST', body });
+      md.close(); toast(kind === 'einkauf' ? 'Einkauf gespeichert' : 'Verkauf gespeichert'); onSaved && onSaved();
+    } catch (e) { fail(e); }
+  };
+  if (isEdit) $('#sf-del', md.el).onclick = async () => {
+    if (!(await confirmBox('Diesen Eintrag löschen? Eine beim Kunden eingetragene Maschine bleibt bestehen.'))) return;
+    try { await api('/sales/' + s.id, { method: 'DELETE' }); md.close(); toast('Gelöscht'); onSaved && onSaved(); } catch (e) { fail(e); }
   };
 }
 
