@@ -316,9 +316,10 @@ app.get('/api/customers/:id', auth, (req, res) => {
     WHERE t.customer_id=? ORDER BY t.status='done', CASE WHEN t.status='open' THEN t.due_date END ASC, t.done_at DESC`, c.id);
   const files = all('SELECT f.id, f.filename, f.mime, f.size, f.created_at, u.name uploader FROM files f LEFT JOIN users u ON u.id=f.uploaded_by WHERE f.customer_id=? ORDER BY f.created_at DESC', c.id);
   const machines = all(`SELECT m.*, u.name updated_by_name FROM machines m LEFT JOIN users u ON u.id=m.updated_by WHERE m.customer_id=? ORDER BY m.category COLLATE NOCASE, m.brand COLLATE NOCASE, m.id`, c.id);
+  const projects = all(`${PROJECT_SQL} WHERE p.customer_id=? ORDER BY ${PROJ_CLOSED_SQL}, p.faellig IS NULL, p.faellig`, c.id).map(projCalc);
   const ids = all('SELECT id FROM customers ORDER BY last_name COLLATE NOCASE, first_name COLLATE NOCASE').map((r) => r.id);
   const i = ids.indexOf(c.id);
-  res.json({ customer: c, entries, tasks, files, machines, prev: ids[i - 1] || null, next: ids[i + 1] || null });
+  res.json({ customer: c, entries, tasks, files, machines, projects, prev: ids[i - 1] || null, next: ids[i + 1] || null });
 });
 
 app.put('/api/customers/:id', auth, (req, res) => {
@@ -485,6 +486,168 @@ app.delete('/api/machines/:id', auth, (req, res) => {
     run('DELETE FROM machines WHERE id=?', old.id);
     L.systemEntry(old.customer_id, req.user.id, `Maschine entfernt: ${L.machineName(old)}`);
   });
+  res.json({ ok: true });
+});
+
+// ---------- Verkaufsprojekte (alle Marken) ----------
+const PROJ_STATUS = [['Lead / Interesse', 0.10], ['Bedarf geklärt', 0.25], ['Vorführung', 0.40], ['Angebot erstellt', 0.50], ['Verhandlung', 0.75], ['Gewonnen', 1], ['Verloren', 0], ['Zurückgestellt', 0.05]];
+const PROJ_PROB = Object.fromEntries(PROJ_STATUS);
+const PROJ_CLOSED = ['Gewonnen', 'Verloren', 'Zurückgestellt'];
+const PROJ_CLOSED_SQL = `p.status IN (${PROJ_CLOSED.map((s) => `'${s}'`).join(',')})`;
+const PROJ_FIN = ['Offen', 'Bar / Überweisung', 'Finanzierung', 'Leasing', 'Miete / Mietkauf'];
+const PROJECT_SQL = `SELECT p.*, u.name user_name,
+  COALESCE(NULLIF(TRIM(COALESCE(c.company,'') || CASE WHEN COALESCE(c.company,'')<>'' AND (COALESCE(c.first_name,'')<>'' OR COALESCE(c.last_name,'')<>'') THEN ' – ' ELSE '' END || TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,''))), ''), p.kunde) kunde_name,
+  COALESCE(NULLIF(c.city,''), p.ort) ort_name
+  FROM projects p LEFT JOIN users u ON u.id=p.user_id LEFT JOIN customers c ON c.id=p.customer_id`;
+/** Ampel der Wiedervorlage: rot = überfällig, gelb = in 7 Tagen, grün = später, '' = ohne Termin/abgeschlossen */
+function projAmpel(p) {
+  if (!p.faellig || PROJ_CLOSED.includes(p.status)) return '';
+  const t = U.today();
+  if (p.faellig < t) return 'rot';
+  return p.faellig <= U.addDays(t, 7) ? 'gelb' : 'gruen';
+}
+const projCalc = (p) => ({ ...p, prob: PROJ_PROB[p.status] ?? 0, closed: PROJ_CLOSED.includes(p.status), ampel: projAmpel(p) });
+const PROJ_FIELDS = ['customer_id', 'kunde', 'ort', 'ansprech', 'telefon', 'brand', 'typ', 'modell', 'ausstattung', 'status', 'preis', 'angebot_vom', 'finanzierung', 'inzahlung', 'inz_wert', 'naechster', 'faellig', 'abschluss', 'liefer', 'user_id', 'notizen'];
+function cleanProject(b, user) {
+  const d = (v) => (U.isDate(v) ? v : null);
+  const p = {
+    customer_id: b.customer_id && get('SELECT id FROM customers WHERE id=?', b.customer_id) ? Number(b.customer_id) : null,
+    kunde: U.str(b.kunde, 200) || '', ort: U.str(b.ort, 100) || '', ansprech: U.str(b.ansprech, 120) || '', telefon: U.str(b.telefon, 60) || '',
+    brand: U.str(b.brand, 60) || '', typ: U.str(b.typ, 60) || '', modell: U.str(b.modell, 100) || '', ausstattung: U.str(b.ausstattung, 500) || '',
+    status: PROJ_PROB[b.status] !== undefined ? b.status : 'Lead / Interesse',
+    preis: money(b.preis), angebot_vom: d(b.angebot_vom), finanzierung: PROJ_FIN.includes(b.finanzierung) ? b.finanzierung : 'Offen',
+    inzahlung: U.str(b.inzahlung, 300) || '', inz_wert: money(b.inz_wert),
+    naechster: U.str(b.naechster, 300) || '', faellig: d(b.faellig), abschluss: d(b.abschluss), liefer: d(b.liefer),
+    user_id: b.user_id && get('SELECT id FROM users WHERE id=?', b.user_id) ? Number(b.user_id) : user.id,
+    notizen: U.str(b.notizen, 5000) || '',
+  };
+  if (Number.isNaN(p.preis) || Number.isNaN(p.inz_wert)) return { error: 'Bitte Beträge als Zahl eingeben' };
+  if (!p.customer_id && !p.kunde) return { error: 'Bitte einen Kunden auswählen oder den Namen eintragen' };
+  if (!p.brand) return { error: 'Bitte die Marke auswählen' };
+  return { p };
+}
+/** Wiedervorlage als Aufgabe (Kalender, Erinnerung) für den Verkäufer */
+function syncProjectTask(id) {
+  const p = get(`${PROJECT_SQL} WHERE p.id=?`, id);
+  if (!p) return;
+  const open = get(`SELECT * FROM tasks WHERE project_id=? AND status='open'`, id);
+  if (!p.faellig || PROJ_CLOSED.includes(p.status)) { if (open) run('DELETE FROM tasks WHERE id=?', open.id); return; }
+  const title = `Wiedervorlage: ${p.naechster || 'Verkaufsprojekt'} – ${[p.brand, p.modell].filter(Boolean).join(' ')} – ${p.kunde_name}`.slice(0, 200);
+  const description = [`Verkaufsprojekt Nr. ${p.id} · ${p.status}`, p.preis != null ? `Angebot ${p.preis.toLocaleString('de-DE')} € netto` : '', p.inzahlung ? `Inzahlungnahme: ${p.inzahlung}` : '', p.ansprech ? `Ansprechpartner: ${p.ansprech}${p.telefon ? ' (' + p.telefon + ')' : ''}` : ''].filter(Boolean).join('\n');
+  if (open) {
+    run(`UPDATE tasks SET due_date=?, title=?, description=?, assigned_to=?, customer_id=?, reminder_sent=CASE WHEN due_date=? THEN reminder_sent ELSE 0 END, updated_at=datetime('now','localtime') WHERE id=?`,
+      p.faellig, title, description, p.user_id, p.customer_id, p.faellig, open.id);
+  } else if (!get(`SELECT 1 FROM tasks WHERE project_id=? AND status='done' AND due_date=?`, id, p.faellig)) { // erledigte Wiedervorlage nicht neu anlegen
+    run(`INSERT INTO tasks(customer_id, project_id, kind, title, description, due_date, assigned_to, created_by, remind_day_before) VALUES(?,?,?,?,?,?,?,?,1)`,
+      p.customer_id, id, 'angebot', title, description, p.faellig, p.user_id, null);
+  }
+}
+function projectsQuery(q) {
+  const where = []; const params = [];
+  if (!q.status) where.push(`NOT ${PROJ_CLOSED_SQL}`);
+  else if (q.status !== '*' && PROJ_PROB[q.status] !== undefined) { where.push('p.status=?'); params.push(q.status); }
+  if (q.user && q.user !== 'all') { where.push('p.user_id=?'); params.push(Number(q.user)); }
+  if (q.brand) { where.push('p.brand=?'); params.push(q.brand); }
+  if (q.q) { where.push(`(COALESCE(c.last_name,'') || ' ' || COALESCE(c.first_name,'') || ' ' || COALESCE(c.company,'') || ' ' || COALESCE(c.city,'') || ' ' || p.kunde || ' ' || p.ort || ' ' || p.ansprech || ' ' || p.typ || ' ' || p.modell || ' ' || p.ausstattung || ' ' || p.naechster || ' ' || p.notizen || ' ' || p.inzahlung) LIKE ?`); params.push('%' + q.q + '%'); }
+  if (q.meta) return [];
+  return all(`${PROJECT_SQL} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY p.faellig IS NULL, p.faellig, p.id`, ...params).map(projCalc);
+}
+function projectStats(user) {
+  const all_ = all(`${PROJECT_SQL} ${user && user !== 'all' ? 'WHERE p.user_id=?' : ''}`, ...(user && user !== 'all' ? [Number(user)] : [])).map(projCalc);
+  const open = all_.filter((p) => !p.closed); const won = all_.filter((p) => p.status === 'Gewonnen'); const lost = all_.filter((p) => p.status === 'Verloren');
+  const s = (a, f) => a.reduce((n, p) => n + (p[f] || 0), 0);
+  return { open: open.length, volume: s(open, 'preis'), weighted: Math.round(open.reduce((n, p) => n + (p.preis || 0) * p.prob, 0)), won: won.length, won_volume: s(won, 'preis'),
+    quote: won.length + lost.length ? Math.round((won.length / (won.length + lost.length)) * 100) : null,
+    overdue: all_.filter((p) => p.ampel === 'rot').length, soon: all_.filter((p) => p.ampel === 'gelb').length, trade_in: s(open, 'inz_wert') };
+}
+app.get('/api/projects', auth, (req, res) => {
+  res.json({ rows: projectsQuery(req.query), stats: projectStats(req.query.user), statuses: PROJ_STATUS, financing: PROJ_FIN,
+    brands: all("SELECT DISTINCT brand FROM projects WHERE brand<>'' ORDER BY brand").map((r) => r.brand) });
+});
+app.get('/api/projects/report.html', auth, (req, res) => {
+  const rows = projectsQuery(req.query); const st = projectStats(req.query.user);
+  const h = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const eur = (n) => (n == null ? '' : Math.round(n).toLocaleString('de-DE') + ' €');
+  const de = (d) => (d ? d.split('-').reverse().join('.') : '');
+  const filt = !req.query.status ? 'Offene Projekte' : req.query.status === '*' ? 'Alle Projekte' : 'Status: ' + req.query.status;
+  const who = req.query.user && req.query.user !== 'all' ? ' · ' + (get('SELECT name FROM users WHERE id=?', req.query.user)?.name || '') : '';
+  const brand = req.query.brand ? req.query.brand + ' ' : '';
+  const AMP = { rot: '#c0292f', gelb: '#e8a800', gruen: '#3f8f2e' };
+  res.type('html').send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><title>${h(brand)}Verkaufsprojekte ${de(U.today())}</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:opsz,wdth,wght@6..12,75..100,400..900&display=swap" rel="stylesheet">
+<style>
+@page { size: A4 landscape; margin: 10mm 10mm 12mm; }
+* { box-sizing: border-box; } body { font-family: 'Nunito Sans', Arial, sans-serif; color: #2b2d2e; font-size: 8.8pt; margin: 0; padding: 16px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+header { display: flex; align-items: flex-end; justify-content: space-between; border-bottom: 3px solid #c0292f; padding-bottom: 8px; margin-bottom: 10px; }
+header img { height: 42px; } h1 { margin: 0; font-size: 17pt; font-stretch: 87.5%; } .sub { color: #6a6d6e; font-weight: 700; text-align: right; }
+.kpis { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-bottom: 10px; }
+.kpi { border: 1px solid #ddd; border-left: 4px solid #c0292f; padding: 5px 8px; } .kpi .n { font-size: 12.5pt; font-weight: 900; font-stretch: 87.5%; } .kpi .l { color: #6a6d6e; font-size: 7pt; font-weight: 700; text-transform: uppercase; }
+.kpi.a .n { color: #c0292f; }
+table { width: 100%; border-collapse: collapse; } thead { display: table-header-group; }
+th { text-align: left; font-size: 7.5pt; text-transform: uppercase; background: #2b2d2e; color: #fff; padding: 5px; }
+td { padding: 4px 5px; border-bottom: 1px solid #e4e4e4; vertical-align: top; } tr { page-break-inside: avoid; } tbody tr:nth-child(even) td { background: #fafafa; }
+.r { text-align: right; white-space: nowrap; } .m { color: #6a6d6e; font-size: 7.5pt; display: block; } .nowrap { white-space: nowrap; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+tr.won td { background: #eaf3e3 !important; } tr.lost td { color: #999; }
+footer { margin-top: 12px; color: #8a8d8e; font-size: 7.5pt; display: flex; justify-content: space-between; }
+.bar { position: fixed; top: 10px; right: 10px; } .bar button { font: inherit; font-weight: 700; padding: 8px 14px; border-radius: 6px; border: 0; background: #c0292f; color: #fff; cursor: pointer; }
+@media print { .bar { display: none; } body { padding: 0; } }
+</style></head><body>
+<div class="bar"><button onclick="window.print()">Drucken / als PDF speichern</button></div>
+<header><img src="/img/logo.png" alt=""><div><h1>${h(brand)}Verkaufsprojekte</h1><div class="sub">${h(filt)}${h(who)} · Stand ${de(U.today())}</div></div></header>
+<div class="kpis">
+  <div class="kpi"><div class="n">${st.open}</div><div class="l">Offene Projekte</div></div>
+  <div class="kpi"><div class="n">${eur(st.volume) || '0 €'}</div><div class="l">Angebotsvolumen offen</div></div>
+  <div class="kpi"><div class="n">${eur(st.weighted) || '0 €'}</div><div class="l">Gewichtete Pipeline</div></div>
+  <div class="kpi"><div class="n">${st.won} · ${eur(st.won_volume) || '0 €'}</div><div class="l">Gewonnen</div></div>
+  <div class="kpi"><div class="n">${st.quote == null ? '–' : st.quote + ' %'}</div><div class="l">Abschlussquote</div></div>
+  <div class="kpi ${st.overdue ? 'a' : ''}"><div class="n">${st.overdue}</div><div class="l">Wiedervorlage überfällig</div></div>
+  <div class="kpi"><div class="n">${st.soon}</div><div class="l">Fällig in 7 Tagen</div></div>
+</div>
+<table><thead><tr><th>Nr.</th><th>Kunde / Ort</th><th>Ansprechpartner</th><th>Maschine</th><th>Status</th><th class="r">Wahrsch.</th><th class="r">Angebot netto</th><th class="r">Inzahlungn.</th><th>Nächster Schritt</th><th>Fällig</th><th>Abschluss</th><th>Lieferung</th><th>Verkäufer</th></tr></thead><tbody>
+${rows.map((p) => `<tr class="${p.status === 'Gewonnen' ? 'won' : p.status === 'Verloren' ? 'lost' : ''}"><td>${p.id}</td><td><b>${h(p.kunde_name)}</b><span class="m">${h(p.ort_name)}</span></td><td>${h(p.ansprech)}<span class="m">${h(p.telefon)}</span></td>
+<td><b>${h(p.brand)}</b> ${h([p.typ, p.modell].filter(Boolean).join(' '))}<span class="m">${h(p.ausstattung)}</span></td>
+<td>${h(p.status)}<span class="m">${p.finanzierung !== 'Offen' ? h(p.finanzierung) : ''}</span></td><td class="r">${Math.round(p.prob * 100)} %</td>
+<td class="r">${eur(p.preis)}${p.preis ? `<span class="m">gew. ${eur(p.preis * p.prob)}</span>` : ''}</td><td class="r">${eur(p.inz_wert)}<span class="m">${h(p.inzahlung)}</span></td>
+<td>${h(p.naechster)}</td><td class="nowrap">${p.ampel ? `<span class="dot" style="background:${AMP[p.ampel]}"></span>` : ''}${de(p.faellig)}</td><td>${de(p.abschluss)}</td><td>${de(p.liefer)}</td><td>${h(p.user_name || '')}</td></tr>`).join('') || '<tr><td colspan="13">Keine Projekte für diesen Filter.</td></tr>'}
+</tbody></table>
+<footer><span>Bussmann Land- &amp; Gartentechnik · Hauptstraße 5 · 48329 Havixbeck · 02507 1294</span><span>Ampel: rot = Wiedervorlage überfällig · gelb = in 7 Tagen · grün = später</span></footer>
+<script>document.fonts && document.fonts.ready.then(() => setTimeout(() => window.print(), 300));</script>
+</body></html>`);
+});
+app.get('/api/projects/:id', auth, (req, res) => {
+  const p = get(`${PROJECT_SQL} WHERE p.id=?`, req.params.id);
+  if (!p) return res.status(404).json({ error: 'Projekt nicht gefunden' });
+  res.json(projCalc(p));
+});
+app.post('/api/projects', auth, (req, res) => {
+  const { p, error } = cleanProject(req.body || {}, req.user);
+  if (error) return bad(res, error);
+  const id = tx(() => {
+    const id = Number(run(`INSERT INTO projects(${PROJ_FIELDS.join(',')}, created_by) VALUES(${PROJ_FIELDS.map(() => '?').join(',')}, ?)`, ...PROJ_FIELDS.map((f) => p[f]), req.user.id).lastInsertRowid);
+    if (p.customer_id) L.systemEntry(p.customer_id, req.user.id, `Verkaufsprojekt angelegt: ${[p.brand, p.typ, p.modell].filter(Boolean).join(' ')} (${p.status})`);
+    syncProjectTask(id);
+    return id;
+  });
+  res.json({ id });
+});
+app.put('/api/projects/:id', auth, (req, res) => {
+  const old = get('SELECT * FROM projects WHERE id=?', req.params.id);
+  if (!old) return res.status(404).json({ error: 'Projekt nicht gefunden' });
+  const { p, error } = cleanProject({ ...old, ...req.body }, req.user);
+  if (error) return bad(res, error);
+  tx(() => {
+    run(`UPDATE projects SET ${PROJ_FIELDS.map((f) => f + '=?').join(',')}, updated_at=datetime('now','localtime') WHERE id=?`, ...PROJ_FIELDS.map((f) => p[f]), old.id);
+    if (p.customer_id && old.status !== p.status) L.systemEntry(p.customer_id, req.user.id, `Verkaufsprojekt ${[p.brand, p.modell].filter(Boolean).join(' ')}: Status „${p.status}“`);
+    syncProjectTask(old.id);
+  });
+  res.json({ ok: true });
+});
+app.delete('/api/projects/:id', auth, (req, res) => {
+  const old = get('SELECT * FROM projects WHERE id=?', req.params.id);
+  if (!old) return res.status(404).json({ error: 'Projekt nicht gefunden' });
+  if (req.user.role !== 'admin' && old.created_by !== req.user.id && old.user_id !== req.user.id) return res.status(403).json({ error: 'Nur der Verkäufer oder ein Administrator kann das Projekt löschen' });
+  tx(() => { run(`DELETE FROM tasks WHERE project_id=? AND status='open'`, old.id); run('UPDATE tasks SET project_id=NULL WHERE project_id=?', old.id); run('DELETE FROM projects WHERE id=?', old.id); });
   res.json({ ok: true });
 });
 

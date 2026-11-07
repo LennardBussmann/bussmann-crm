@@ -453,3 +453,26 @@ table.list.plain tbody tr[data-user] { cursor: pointer; }
 .stats > .stat { min-width: 0; }
 .show-m-only { display: none; }
 @media (max-width: 860px) { .show-m-only { display: block; } table.list td .pct { margin-top: 3px; } }
+
+/* Verkaufsprojekte */
+.kpis { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; margin-bottom: 16px; }
+.kpi { background: #fff; border: 1px solid var(--line); border-left: 4px solid var(--red); border-radius: 6px; padding: 10px 12px; min-width: 0; }
+.kpi .l { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 800; }
+.kpi .v { font-size: 20px; font-weight: 900; font-stretch: 87.5%; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi.alert { background: var(--red-50); } .kpi.alert .v { color: var(--red); }
+@media (max-width: 1200px) { .kpis { grid-template-columns: repeat(4, 1fr); } }
+@media (max-width: 860px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+table.list.projects td { font-size: 13.5px; }
+table.list.projects th[data-k] { cursor: pointer; user-select: none; white-space: nowrap; }
+table.list tbody tr.p-won { background: #f1f8ec; } table.list tbody tr.p-lost td { color: #999; }
+.pstat { display: inline-block; padding: 2px 9px; border-radius: 12px; font-size: 12px; font-weight: 800; background: var(--line); white-space: nowrap; }
+.pstat.hot { background: #fbe6e6; color: #a51e24; } .pstat.won { background: #e3f1e4; color: #2e7d32; } .pstat.lost { background: #eee; color: #888; text-decoration: line-through; } .pstat.paused { background: #f1f1f1; color: #888; }
+.ampel { display: inline-block; width: 11px; height: 11px; border-radius: 50%; background: transparent; vertical-align: -1px; }
+.ampel.rot { background: #c0292f; box-shadow: 0 0 0 3px #f6d4d5; } .ampel.gelb { background: #e8a800; box-shadow: 0 0 0 3px #fbecc0; } .ampel.gruen { background: #3f8f2e; box-shadow: 0 0 0 3px #d6ebd0; }
+.form-grid .sec { font-weight: 900; color: var(--red); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; border-bottom: 2px solid var(--red); padding-bottom: 3px; margin-top: 4px; }
+.callout.ok { background: #eef7ea; border-color: #b9dbab; color: #2e5e1c; }
+.brand-tag { font-weight: 900; color: var(--red); }
+td .wrap { white-space: normal; max-width: 220px; }
+.hide-l-only { display: none; }
+@media (max-width: 1500px) { .hide-l { display: none; } .hide-l-only { display: block; } }
+.more-links { display: flex; gap: 10px; flex-wrap: wrap; } .more-links .btn { flex: 1; justify-content: center; }

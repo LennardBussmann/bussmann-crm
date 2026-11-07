@@ -331,6 +331,32 @@ const U = require('../lib/util');
     const rep = await call('a', 'GET', `/api/sales/report.html?from=${mon}01&to=${mon}31`);
     assert.ok(rep.includes('Verkaufsbericht') && rep.includes('36.500,00 €') && rep.includes('Fendt 211 Vario'));
 
+    // Verkaufsprojekte
+    await assert.rejects(call('a', 'POST', '/api/projects', { kunde: 'X' }), /Marke/);
+    const pr1 = (await call('a', 'POST', '/api/projects', { customer_id: scust, brand: 'Weidemann', typ: 'Hoftrac', modell: '1390', status: 'Angebot erstellt', preis: '42.000', inz_wert: '8.000', inzahlung: 'Weidemann 1140 Bj. 2012', naechster: 'Angebot nachfassen', faellig: U.addDays(U.today(), -1), user_id: kollege.id })).id;
+    const pr2 = (await call('k', 'POST', '/api/projects', { kunde: 'Hof Neu', ort: 'Darup', brand: 'Massey Ferguson', typ: 'Traktor', modell: '5S.145', status: 'Verhandlung', preis: 98000, faellig: U.addDays(U.today(), 3) })).id;
+    const pr3 = (await call('a', 'POST', '/api/projects', { kunde: 'Hof Alt', brand: 'Weidemann', status: 'Verloren', preis: 30000 })).id;
+    let pl = await call('a', 'GET', '/api/projects');
+    assert.equal(pl.rows.length, 2, 'nur offene'); assert.equal(pl.stats.open, 2); assert.equal(pl.stats.volume, 140000);
+    assert.equal(pl.stats.weighted, 42000 * 0.5 + 98000 * 0.75); assert.equal(pl.stats.overdue, 1); assert.equal(pl.stats.soon, 1); assert.equal(pl.stats.quote, 0);
+    assert.equal(pl.rows.find((r) => r.id === pr1).ampel, 'rot'); assert.equal(pl.rows.find((r) => r.id === pr2).kunde_name, 'Hof Neu');
+    assert.equal((await call('a', 'GET', '/api/projects?brand=Massey%20Ferguson')).rows.length, 1);
+    assert.equal((await call('a', 'GET', '/api/projects?status=*')).rows.length, 3);
+    // Wiedervorlage als Aufgabe beim Verkäufer
+    let ptask = (await call('k', 'GET', '/api/tasks?scope=mine&status=open')).find((t) => t.project_id === pr1);
+    assert.ok(ptask && ptask.title.includes('Angebot nachfassen') && ptask.customer_id === scust);
+    await call('a', 'PUT', `/api/projects/${pr1}`, { faellig: U.addDays(U.today(), 10) });
+    ptask = (await call('k', 'GET', '/api/tasks?scope=mine&status=open')).find((t) => t.project_id === pr1);
+    assert.equal(ptask.due_date, U.addDays(U.today(), 10));
+    await call('a', 'PUT', `/api/projects/${pr1}`, { status: 'Gewonnen' });
+    assert.ok(!(await call('k', 'GET', '/api/tasks?scope=mine&status=open')).some((t) => t.project_id === pr1), 'Gewonnen -> Wiedervorlage entfällt');
+    pl = await call('a', 'GET', '/api/projects?status=*');
+    assert.equal(pl.stats.won, 1); assert.equal(pl.stats.quote, 50);
+    assert.equal((await call('a', 'GET', `/api/customers/${scust}`)).projects.length, 1);
+    assert.ok((await call('a', 'GET', '/api/projects/report.html?status=*')).includes('Massey Ferguson'));
+    await assert.rejects(call('k', 'DELETE', `/api/projects/${pr3}`), /403/);
+    await call('k', 'DELETE', `/api/projects/${pr2}`);
+
     // Abwesenheiten
     const d1 = U.addDays(U.today(), 20); const d3 = U.addDays(U.today(), 22);
     const absId = (await call('k', 'POST', '/api/absences', { kind: 'urlaub', start_date: d1, end_date: d3, note: 'Mallorca' })).id;

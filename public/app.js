@@ -150,6 +150,7 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   euro: '<path d="M17.5 6.2A7 7 0 1 0 17.5 17.8"/><path d="M4 10h9M4 14h9"/>',
   box: '<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
+  target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/>',
 };
 const icon = (n, cls = '') => `<svg class="ico ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ICONS.dot}</svg>`;
 const ENTRY_ICON = { besuch: 'car', telefonat: 'phone', email: 'mail', termin: 'cal', notiz: 'note', sonstiges: 'dot', system: 'info' };
@@ -285,7 +286,7 @@ function route() {
   const main = $('#main');
   main.innerHTML = '<div class="empty">Lädt …</div>';
   window.scrollTo(0, 0);
-  const views = { '': viewDashboard, start: viewDashboard, kunden: p1 ? () => viewCustomer(Number(p1)) : viewCustomers, aufgaben: viewTasks, kalender: viewCalendar, karte: viewMap, verkaeufe: viewSales, einstellungen: viewSettings };
+  const views = { '': viewDashboard, start: viewDashboard, kunden: p1 ? () => viewCustomer(Number(p1)) : viewCustomers, aufgaben: viewTasks, kalender: viewCalendar, karte: viewMap, verkaeufe: viewSales, projekte: viewProjects, einstellungen: viewSettings };
   (views[p0] || viewDashboard)(main).catch(fail);
   if (p0 === 'aufgaben' && p1) openTask(Number(p1));
 }
@@ -362,7 +363,7 @@ function renderSetup() {
 
 // ======================= Grundgerüst =======================
 function renderShell() {
-  const nav = [['start', 'home', 'Übersicht'], ['kunden', 'users', 'Kunden'], ['karte', 'map', 'Karte'], ['aufgaben', 'tasks', 'Aufgaben'], ['kalender', 'cal', 'Kalender'], ['verkaeufe', 'euro', 'Verkäufe'], ['einstellungen', 'gear', 'Einstellungen']];
+  const nav = [['start', 'home', 'Übersicht'], ['kunden', 'users', 'Kunden'], ['karte', 'map', 'Karte'], ['aufgaben', 'tasks', 'Aufgaben'], ['kalender', 'cal', 'Kalender'], ['projekte', 'target', 'Projekte'], ['verkaeufe', 'euro', 'Verkäufe'], ['einstellungen', 'gear', 'Einstellungen']];
   $('#app').innerHTML = `<div class="shell">
     <header class="topbar">
       <a class="brand" href="#/"><img src="img/logo.png" alt="Bussmann Land- & Gartentechnik"></a>
@@ -382,7 +383,7 @@ function renderShell() {
     <aside class="sidebar"><nav class="nav">${nav.map(([r, i, l]) => `<a href="#/${r === 'start' ? '' : r}" data-r="${r}">${icon(i, 'lg')}${l}</a>`).join('')}</nav>
       <div class="foot">Bussmann Land- &amp; Gartentechnik<br>Wenn Sie Qualität und Service schätzen!</div></aside>
     <main class="main" id="main"></main>
-    <nav class="mobile-nav">${nav.map(([r, i, l]) => `<a href="#/${r === 'start' ? '' : r}" data-r="${r}">${icon(i, 'lg')}${l === 'Einstellungen' ? 'Mehr' : l}</a>`).join('')}</nav>
+    <nav class="mobile-nav">${nav.filter(([r]) => !['karte', 'verkaeufe'].includes(r)).map(([r, i, l]) => `<a href="#/${r === 'start' ? '' : r}" data-r="${r}">${icon(i, 'lg')}${l === 'Einstellungen' ? 'Mehr' : l}</a>`).join('')}</nav>
   </div>`;
   $('#logout').onclick = async () => { await api('/logout', { method: 'POST', body: {} }); state.me = null; location.hash = ''; renderLogin(); };
   $('#quick-task').onclick = () => openTaskForm({});
@@ -531,20 +532,20 @@ async function openTask(id, reload) {
   else $('#t-done', m.el).onclick = () => { m.close(); completeTask(id, reload || route); };
 }
 
-function customerPicker(container, initial) {
+function customerPicker(container, initial, onChange) {
   let selected = initial;
   const render = () => {
     container.innerHTML = selected
       ? `<div class="selected-cust">${icon('user')}<a href="#/kunden/${selected.id}" target="_blank">${esc(selected.name)}</a><button type="button" class="btn ghost sm" data-clear>${icon('x')}</button></div>`
       : `<input type="search" placeholder="Kunde suchen (optional)" data-q autocomplete="off"><div class="picker-results hidden" data-res></div>`;
-    if (selected) { $('[data-clear]', container).onclick = () => { selected = null; render(); }; return; }
+    if (selected) { $('[data-clear]', container).onclick = () => { selected = null; render(); onChange && onChange(null); }; return; }
     const q = $('[data-q]', container); const res = $('[data-res]', container);
     q.oninput = debounce(async () => {
       if (!q.value.trim()) { res.classList.add('hidden'); return; }
       const rows = await api('/search?q=' + encodeURIComponent(q.value));
       res.innerHTML = rows.map((c) => `<div data-id="${c.id}" data-name="${esc(custName(c))}">${esc(custName(c))} <span class="muted small">${esc(c.city || '')}</span></div>`).join('') || '<div class="muted">Kein Treffer</div>';
       res.classList.remove('hidden');
-      $$('[data-id]', res).forEach((d) => d.onclick = () => { selected = { id: Number(d.dataset.id), name: d.dataset.name }; render(); });
+      $$('[data-id]', res).forEach((d) => d.onclick = () => { selected = { id: Number(d.dataset.id), name: d.dataset.name }; render(); onChange && onChange(selected); });
     }, 200);
   };
   render();
@@ -1079,6 +1080,7 @@ async function viewCustomer(id, tab) {
             <button data-tab="zeitleiste" class="${curTab === 'zeitleiste' ? 'on' : ''}">Zeitleiste</button>
             <button data-tab="aufgaben" class="${curTab === 'aufgaben' ? 'on' : ''}">Aufgaben ${openTasks.length ? `<span class="badge">${openTasks.length}</span>` : ''}</button>
             <button data-tab="maschinen" class="${curTab === 'maschinen' ? 'on' : ''}">Maschinen ${d.machines.length ? `<span class="badge grey">${d.machines.length}</span>` : ''}</button>
+            <button data-tab="projekte" class="${curTab === 'projekte' ? 'on' : ''}">Projekte ${d.projects.filter((p) => !p.closed).length ? `<span class="badge grey">${d.projects.filter((p) => !p.closed).length}</span>` : ''}</button>
             <button data-tab="dateien" class="${curTab === 'dateien' ? 'on' : ''}">Dateien ${d.files.length ? `<span class="badge grey">${d.files.length}</span>` : ''}</button>
           </div>
           <div id="tab-body"></div>
@@ -1121,6 +1123,7 @@ async function viewCustomer(id, tab) {
       $('#cu-task').onclick = () => openTaskForm({}, () => reload('aufgaben'), { id: c.id, name: custName(c) });
       bindTaskList(body, () => reload('aufgaben'));
     } else if (t === 'maschinen') renderMachines(body, d, reload);
+    else if (t === 'projekte') renderCustomerProjects(body, d, reload);
     else renderFiles(body, d, reload);
   };
   renderCustomerMap($('#cmap-box'), c, reload);
@@ -1300,6 +1303,176 @@ async function openMachineForm(m, onSaved) {
   if (isEdit) $('#mf-del', md.el).onclick = async () => {
     if (!(await confirmBox('Diese Maschine beim Kunden entfernen? Offene Wartungsaufgaben werden mit gelöscht.', 'Entfernen'))) return;
     try { await api('/machines/' + m.id, { method: 'DELETE' }); md.close(); toast('Maschine entfernt'); onSaved && onSaved(); } catch (e) { fail(e); }
+  };
+}
+
+// ======================= Verkaufsprojekte =======================
+const PROJ_BRANDS = ['Weidemann', 'Massey Ferguson', 'Fendt', 'Kubota', 'TAFE', 'Kandi', 'Husqvarna', 'Stihl'];
+const PROJ_TYPES_BY = {
+  Weidemann: ['Hoftrac', 'eHoftrac (elektrisch)', 'Radlader', 'Teleskopradlader', 'Teleskoplader'],
+  'Massey Ferguson': ['Traktor', 'Kompakttraktor', 'Teleskoplader', 'Mähdrescher', 'Presse', 'Mähwerk', 'Schwader', 'Wender'],
+  Fendt: ['Traktor', 'Mähdrescher', 'Feldhäcksler', 'Presse', 'Mähwerk', 'Schwader'],
+  Kubota: ['Kompakttraktor', 'Traktor', 'Aufsitzmäher', 'Minibagger', 'Utility Vehicle'],
+  TAFE: ['Kompakttraktor', 'Traktor'],
+  Husqvarna: ['Aufsitzmäher', 'Rasentraktor', 'Mähroboter', 'Motorsäge'],
+  Stihl: ['Mähroboter', 'Motorsäge', 'Freischneider', 'Akku-Geräte'],
+};
+const projTypes = (brand) => [...new Set([...(PROJ_TYPES_BY[brand] || []), 'Traktor', 'Kompakttraktor', 'Hoftrac', 'Radlader', 'Teleskoplader', 'Gebrauchtmaschine', 'Sonstiges'])];
+const PROJ_STATUS_CLS = { Gewonnen: 'won', Verloren: 'lost', Verhandlung: 'hot', 'Angebot erstellt': 'hot', Zurückgestellt: 'paused' };
+const ampel = (p) => (p.ampel ? `<span class="ampel ${p.ampel}" title="${{ rot: 'Wiedervorlage überfällig', gelb: 'fällig in den nächsten 7 Tagen', gruen: 'Wiedervorlage später' }[p.ampel]}"></span>` : '<span class="ampel"></span>');
+const eur0 = (n) => (n == null ? '' : Math.round(n).toLocaleString('de-DE') + ' €');
+let projMeta = null;
+const projMetaLoad = async () => (projMeta ||= await api('/projects?meta=1'));
+
+function projRow(p, { showCust = true } = {}) {
+  return `<tr data-pid="${p.id}" class="${p.status === 'Verloren' ? 'p-lost' : p.status === 'Gewonnen' ? 'p-won' : ''}">
+    <td class="hide-m muted">${p.id}</td>
+    ${showCust ? `<td class="hide-m"><b>${esc(p.kunde_name)}</b><div class="muted small">${esc(p.ort_name || '')}</div><div class="muted small hide-l-only">${esc(p.ansprech)}${p.telefon ? ' · ' + esc(p.telefon) : ''}</div></td>` : ''}
+    <td class="hide-l">${esc(p.ansprech)}<div class="muted small">${esc(p.telefon)}</div></td>
+    <td>${showCust ? `<div class="show-m-only"><b>${esc(p.kunde_name)}</b> <span class="muted small">${esc(p.ort_name || '')}</span></div>` : ''}<span class="brand-tag">${esc(p.brand)}</span> ${esc([p.typ, p.modell].filter(Boolean).join(' '))}<div class="muted small">${esc(p.ausstattung)}</div><div class="show-m-only"><span class="pstat ${PROJ_STATUS_CLS[p.status] || ''}">${esc(p.status)}</span> ${p.preis ? eur0(p.preis) : ''}</div></td>
+    <td class="hide-m"><span class="pstat ${PROJ_STATUS_CLS[p.status] || ''}">${esc(p.status)}</span><div class="muted small">${Math.round(p.prob * 100)} %${p.finanzierung && p.finanzierung !== 'Offen' ? ' · ' + esc(p.finanzierung) : ''}</div></td>
+    <td class="nowrap">${ampel(p)} ${deDate(p.faellig)}<div class="muted small hide-m wrap">${esc(p.naechster)}</div></td>
+    <td class="num nowrap hide-m">${eur0(p.preis)}${p.preis ? `<div class="muted small">gew. ${eur0(p.preis * p.prob)}</div>` : ''}</td>
+    <td class="num nowrap hide-m">${eur0(p.inz_wert)}<div class="muted small wrap">${esc(p.inzahlung)}</div></td>
+    <td class="nowrap hide-l">${deDate(p.abschluss)}</td>
+    <td class="nowrap hide-l">${deDate(p.liefer)}</td>
+    <td class="hide-m">${p.user_name ? `${avatar(p.user_name, p.user_id, 'xs')} ${esc(p.user_name.split(' ')[0])}` : ''}</td>
+  </tr>`;
+}
+const projHead = (showCust = true) => `<thead><tr><th class="hide-m" data-k="id">Nr.</th>${showCust ? '<th class="hide-m" data-k="kunde_name">Kunde / Ort</th>' : ''}<th class="hide-l" data-k="ansprech">Ansprechpartner</th><th data-k="modell">Maschine</th><th class="hide-m" data-k="prob">Status</th><th data-k="faellig">Wiedervorlage</th><th class="num hide-m" data-k="preis">Angebot netto</th><th class="num hide-m" data-k="inz_wert">Inzahlungn.</th><th class="hide-l" data-k="abschluss">Abschluss</th><th class="hide-l" data-k="liefer">Lieferung</th><th class="hide-m" data-k="user_name">Verkäufer</th></tr></thead>`;
+
+async function viewProjects(main) {
+  const st = { status: '', user: sessionStorage.getItem('pUser') || 'all', q: '', brand: '', sortK: 'faellig', dir: 1 };
+  const meta = await projMetaLoad();
+  main.innerHTML = `
+    <div class="page-head"><h1>Verkaufsprojekte</h1><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn" id="p-pdf" target="_blank" rel="noopener">${icon('file')} Als PDF</a><button class="btn primary" id="p-new">${icon('plus')} Neues Projekt</button></div></div>
+    <div id="p-kpis" class="kpis"></div>
+    <div class="toolbar">
+      <div class="grow"><span class="ico">${icon('search')}</span><input type="search" id="p-q" placeholder="Suchen: Kunde, Ort, Modell, Notiz …"></div>
+      <select id="p-status" style="width:auto"><option value="">Alle offenen</option><option value="*">Alle Projekte</option>${meta.statuses.map(([s, pr]) => `<option value="${esc(s)}">${esc(s)} (${Math.round(pr * 100)} %)</option>`).join('')}</select>
+      <select id="p-brand" style="width:auto"><option value="">Alle Marken</option>${[...new Set([...PROJ_BRANDS, ...meta.brands])].map((b) => `<option>${esc(b)}</option>`).join('')}</select>
+      <select id="p-user" style="width:auto"><option value="all">Alle Verkäufer</option>${userOptions(st.user === 'all' ? null : st.user)}</select>
+    </div>
+    <div class="card"><div class="table-wrap" id="p-list"></div></div>
+    <div class="legend" style="margin-top:10px">Wiedervorlage: ${ampel({ ampel: 'rot' })} überfällig · ${ampel({ ampel: 'gelb' })} in den nächsten 7 Tagen · ${ampel({ ampel: 'gruen' })} später — jede Wiedervorlage steht auch als Aufgabe im Kalender des Verkäufers.</div>`;
+  $('#p-user').value = st.user;
+  const load = async () => {
+    const qs = new URLSearchParams({ status: st.status, user: st.user, q: st.q, brand: st.brand });
+    $('#p-pdf').href = '/api/projects/report.html?' + qs;
+    const d = await api('/projects?' + qs);
+    const s = d.stats;
+    $('#p-kpis').innerHTML = [['Offene Projekte', s.open], ['Angebotsvolumen offen', eur0(s.volume) || '0 €'], ['Gewichtete Pipeline', eur0(s.weighted) || '0 €'], ['Gewonnen', `${s.won} · ${eur0(s.won_volume) || '0 €'}`],
+      ['Abschlussquote', s.quote == null ? '–' : s.quote + ' %'], ['Wiedervorlage überfällig', s.overdue, s.overdue > 0], ['Fällig in 7 Tagen', s.soon]]
+      .map(([l, v, a]) => `<div class="kpi ${a ? 'alert' : ''}"><div class="l">${l}</div><div class="v">${v}</div></div>`).join('');
+    const k = st.sortK;
+    const rows = d.rows.sort((a, b) => { const x = a[k]; const y = b[k]; const ex = x == null || x === ''; const ey = y == null || y === ''; if (ex && ey) return 0; if (ex) return 1; if (ey) return -1; return (typeof x === 'number' ? x - y : String(x).localeCompare(String(y), 'de')) * st.dir; });
+    $('#p-list').innerHTML = rows.length ? `<table class="list projects">${projHead()}<tbody>${rows.map((p) => projRow(p)).join('')}</tbody></table>`
+      : `<div class="empty">${st.q || st.status || st.brand || st.user !== 'all' ? 'Keine Projekte für diesen Filter.' : 'Noch keine Projekte – leg mit „Neues Projekt“ los.'}</div>`;
+    $$('#p-list th[data-k]').forEach((th) => { if (th.dataset.k === k) th.textContent += st.dir > 0 ? ' ▲' : ' ▼'; th.onclick = () => { if (st.sortK === th.dataset.k) st.dir *= -1; else { st.sortK = th.dataset.k; st.dir = 1; } load(); }; });
+    $$('#p-list tr[data-pid]').forEach((tr) => tr.onclick = async () => openProjectForm(await api('/projects/' + tr.dataset.pid), load));
+  };
+  $('#p-q').oninput = debounce((e) => { st.q = e.target.value; load(); });
+  $('#p-status').onchange = (e) => { st.status = e.target.value; load(); };
+  $('#p-brand').onchange = (e) => { st.brand = e.target.value; load(); };
+  $('#p-user').onchange = (e) => { st.user = e.target.value; sessionStorage.setItem('pUser', st.user); load(); };
+  $('#p-new').onclick = () => openProjectForm({ brand: st.brand || localStorage.getItem('pBrand') || '' }, load);
+  await load();
+}
+
+function renderCustomerProjects(body, d, reload) {
+  const c = d.customer;
+  body.innerHTML = `<div style="padding:12px 16px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center"><button class="btn primary sm" id="cp-new">${icon('plus')} Neues Verkaufsprojekt</button><a href="#/projekte" class="small">Alle Projekte</a></div>
+    ${d.projects.length ? `<div class="table-wrap"><table class="list projects">${projHead(false)}<tbody>${d.projects.map((p) => projRow(p, { showCust: false })).join('')}</tbody></table></div>` : '<div class="empty">Noch keine Verkaufsprojekte für diesen Kunden.</div>'}`;
+  $('#cp-new', body).onclick = () => openProjectForm({ customer_id: c.id, kunde_name: custName(c), ansprech: [c.first_name, c.last_name].filter(Boolean).join(' '), telefon: c.mobile || c.phone || '' }, () => reload('projekte'));
+  $$('tr[data-pid]', body).forEach((tr) => tr.onclick = async () => openProjectForm(await api('/projects/' + tr.dataset.pid), () => reload('projekte')));
+}
+
+async function openProjectForm(p, onSaved) {
+  const isEdit = !!p.id;
+  const meta = await projMetaLoad();
+  const sel = (name, list, val) => `<select name="${name}">${list.map((v) => `<option ${v === val ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`;
+  const money = (n) => (n == null ? '' : eur2(n));
+  const md = modal({
+    title: isEdit ? `Projekt Nr. ${p.id} bearbeiten` : 'Neues Verkaufsprojekt', wide: true,
+    body: `<form id="pf"><div class="form-grid">
+      <div class="sec full">Kunde</div>
+      <div class="field full"><label>Kunde aus dem CRM</label><div id="pf-cust"></div></div>
+      <div class="field pf-free"><label>… oder Kunde / Betrieb <span class="muted">(noch nicht im CRM)</span></label><input type="text" name="kunde" value="${esc(p.customer_id ? '' : p.kunde || '')}"></div>
+      <div class="field pf-free"><label>Ort</label><input type="text" name="ort" value="${esc(p.customer_id ? '' : p.ort || '')}"></div>
+      <div class="field"><label>Ansprechpartner</label><input type="text" name="ansprech" value="${esc(p.ansprech || '')}"></div>
+      <div class="field"><label>Telefon</label><input type="tel" name="telefon" value="${esc(p.telefon || '')}"></div>
+      <div class="sec full">Maschine</div>
+      <div class="field"><label>Marke <span class="req">*</span></label><select id="pf-brand-sel">${(() => { const list = [...new Set([...PROJ_BRANDS, ...meta.brands])]; const cur = p.brand || ''; return `<option value="" ${cur ? '' : 'selected'} disabled>– Marke wählen –</option>` + list.map((b) => `<option ${b === cur ? 'selected' : ''}>${esc(b)}</option>`).join('') + `<option value="__other" ${cur && !list.includes(cur) ? 'selected' : ''}>Andere Marke …</option>`; })()}</select>
+        <input type="text" name="brand" value="${esc(p.brand || '')}" placeholder="Marke eintragen" style="margin-top:6px;display:none"></div>
+      <div class="field"><label>Maschinentyp</label><input type="text" name="typ" list="pf-types" value="${esc(p.typ || '')}"><datalist id="pf-types"></datalist></div>
+      <div class="field"><label>Modell</label><input type="text" name="modell" value="${esc(p.modell || '')}" placeholder="z. B. 1390, 4080T"></div>
+      <div class="field"><label>Ausstattung / Anbaugeräte</label><input type="text" name="ausstattung" value="${esc(p.ausstattung || '')}"></div>
+      <div class="sec full">Angebot</div>
+      <div class="field"><label>Status <span class="muted" id="pf-prob"></span></label>${sel('status', meta.statuses.map((s) => s[0]), p.status || 'Lead / Interesse')}</div>
+      <div class="field"><label>Angebot netto</label><div class="money"><input type="text" inputmode="decimal" name="preis" value="${money(p.preis)}" placeholder="0,00"><span>€</span></div></div>
+      <div class="field"><label>Angebot vom</label><input type="date" name="angebot_vom" value="${esc(p.angebot_vom || '')}"></div>
+      <div class="field"><label>Finanzierung</label>${sel('finanzierung', meta.financing, p.finanzierung || 'Offen')}</div>
+      <div class="field"><label>Inzahlungnahme</label><input type="text" name="inzahlung" value="${esc(p.inzahlung || '')}" placeholder="Maschine, Baujahr"></div>
+      <div class="field"><label>Wert Inzahlungnahme</label><div class="money"><input type="text" inputmode="decimal" name="inz_wert" value="${money(p.inz_wert)}" placeholder="0,00"><span>€</span></div></div>
+      <div class="sec full">Termine</div>
+      <div class="field full"><label>Nächster Schritt</label><input type="text" name="naechster" value="${esc(p.naechster || '')}" placeholder="z. B. Vorführung vereinbaren, Angebot nachfassen"></div>
+      <div class="field"><label>Wiedervorlage am <span class="muted">(kommt als Aufgabe in den Kalender)</span></label><input type="date" name="faellig" value="${esc(p.faellig || '')}"></div>
+      <div class="field"><label>Verkäufer</label><select name="user_id">${userOptions(p.user_id || state.me.id)}</select></div>
+      <div class="field"><label>Abschluss geplant</label><input type="date" name="abschluss" value="${esc(p.abschluss || '')}"></div>
+      <div class="field"><label>Liefertermin</label><input type="date" name="liefer" value="${esc(p.liefer || '')}"></div>
+      <div class="field full"><label>Notizen</label><textarea name="notizen" rows="3">${esc(p.notizen || '')}</textarea></div>
+      <div class="full" id="pf-won"></div>
+    </div></form>`,
+    foot: `<span class="left">${isEdit ? `<button class="btn danger" id="pf-del">${icon('trash')} Löschen</button>` : ''}</span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="pf-save">Speichern</button>`,
+  });
+  const f = $('#pf', md.el);
+  const free = () => $$('.pf-free', md.el).forEach((el) => { el.style.display = picker.get() ? 'none' : ''; });
+  const picker = customerPicker($('#pf-cust', md.el), p.customer_id ? { id: p.customer_id, name: p.kunde_name || 'Kunde' } : null, async (c) => {
+    free();
+    if (!c) return;
+    try {
+      const cu = (await api('/customers/' + c.id)).customer;
+      if (!f.ansprech.value) f.ansprech.value = [cu.first_name, cu.last_name].filter(Boolean).join(' ');
+      if (!f.telefon.value) f.telefon.value = cu.mobile || cu.phone || '';
+    } catch { /* egal */ }
+  });
+  free();
+  const bSel = $('#pf-brand-sel', md.el);
+  const brandUpd = () => {
+    const other = bSel.value === '__other';
+    f.brand.style.display = other ? '' : 'none';
+    if (!other) f.brand.value = bSel.value;
+    $('#pf-types', md.el).innerHTML = projTypes(f.brand.value).map((t) => `<option value="${esc(t)}">`).join('');
+    if (!isEdit && !f.typ.value && PROJ_TYPES_BY[f.brand.value]) f.typ.placeholder = 'z. B. ' + PROJ_TYPES_BY[f.brand.value][0];
+  };
+  bSel.onchange = () => { brandUpd(); if (bSel.value === '__other') { f.brand.value = ''; f.brand.focus(); } };
+  f.brand.oninput = () => { $('#pf-types', md.el).innerHTML = projTypes(f.brand.value).map((t) => `<option value="${esc(t)}">`).join(''); };
+  brandUpd();
+  const probs = Object.fromEntries(meta.statuses);
+  const upd = () => {
+    $('#pf-prob', md.el).textContent = `· Wahrscheinlichkeit ${Math.round((probs[f.status.value] ?? 0) * 100)} %`;
+    $('#pf-won', md.el).innerHTML = f.status.value === 'Gewonnen' && isEdit
+      ? `<div class="callout ok">${icon('check')} Gewonnen! <button type="button" class="btn sm primary" id="pf-sale" style="margin-left:8px">${icon('euro')} Als Verkauf erfassen</button>${p.inzahlung ? ' <button type="button" class="btn sm" id="pf-buy">' + icon('box') + ' Inzahlungnahme als Einkauf</button>' : ''}<div class="small muted" style="margin-top:6px">Übernimmt Kunde, Maschine und Angebotspreis in „Verkäufe“ – dort noch den Einkaufspreis eintragen.</div></div>` : '';
+    const s1 = $('#pf-sale', md.el);
+    if (s1) s1.onclick = () => { md.close(); openSaleForm({ kind: 'verkauf', customer_id: p.customer_id, customer_name: p.kunde_name, party: p.customer_id ? '' : p.kunde, brand: p.brand, category: p.typ, model: p.modell, sale_price: parseEur(f.preis.value), date: todayISO(), user_id: p.user_id, notes: [p.ausstattung, p.inzahlung ? `Inzahlungnahme: ${p.inzahlung}${p.inz_wert ? ' (' + eur(p.inz_wert) + ')' : ''}` : '', `Verkaufsprojekt Nr. ${p.id}`].filter(Boolean).join('\n') }, onSaved); };
+    const s2 = $('#pf-buy', md.el);
+    if (s2) s2.onclick = () => { md.close(); openSaleForm({ kind: 'einkauf', condition: 'gebraucht', customer_id: p.customer_id, customer_name: p.kunde_name, party: p.customer_id ? '' : p.kunde, model: p.inzahlung, purchase_price: p.inz_wert, date: todayISO(), user_id: p.user_id, notes: `Inzahlungnahme aus Verkaufsprojekt Nr. ${p.id}` }, onSaved); };
+  };
+  f.status.onchange = upd; upd();
+  $('#pf-save', md.el).onclick = async () => {
+    const body = { ...formData(f), customer_id: picker.get() };
+    if (!body.brand.trim()) { toast('Bitte die Marke auswählen', true); bSel.focus(); return; }
+    localStorage.setItem('pBrand', body.brand);
+    try {
+      if (isEdit) await api('/projects/' + p.id, { method: 'PUT', body });
+      else await api('/projects', { method: 'POST', body });
+      md.close(); toast(body.faellig && !['Gewonnen', 'Verloren', 'Zurückgestellt'].includes(body.status) ? 'Gespeichert – Wiedervorlage steht im Kalender' : 'Gespeichert');
+      projMeta = null; onSaved && onSaved();
+    } catch (e) { fail(e); }
+  };
+  if (isEdit) $('#pf-del', md.el).onclick = async () => {
+    if (!(await confirmBox(`Projekt Nr. ${p.id} (${esc(p.kunde_name)}) endgültig löschen?`))) return;
+    try { await api('/projects/' + p.id, { method: 'DELETE' }); md.close(); toast('Projekt gelöscht'); onSaved && onSaved(); } catch (e) { fail(e); }
   };
 }
 
@@ -1706,6 +1879,7 @@ async function viewSettings(main) {
   main.innerHTML = `
     <div class="page-head"><h1>Einstellungen</h1>${state.version && state.version.commit !== 'dev' ? `<span class="muted small" title="${esc(state.version.subject)}">Version ${esc(state.version.commit)} vom ${esc(state.version.date)} · automatische Updates aktiv</span>` : ''}</div>
     <div style="display:grid;gap:18px;max-width:900px">
+      <div class="card show-m-only"><div class="card-body more-links"><a class="btn" href="#/karte">${icon('map')} Karte</a><a class="btn" href="#/verkaeufe">${icon('euro')} Verkäufe</a></div></div>
       <div class="card"><div class="card-head"><h2>${icon('cal', 'lg')} Kalender mit Outlook &amp; iPhone verbinden</h2></div><div class="card-body">
         <p style="margin-top:0">Ihre Termine und Aufgaben aus dem CRM erscheinen als abonnierter Kalender in Outlook und auf dem iPhone (inkl. Kundengeburtstagen). Neue Einträge werden automatisch übernommen – Outlook aktualisiert je nach Version alle paar Stunden, das iPhone je nach Einstellung alle 15 Minuten bis stündlich.</p>
         <div class="field"><label>Ihre persönliche Abo-Adresse</label><code class="url" id="ical-url">${esc(ical.https)}</code></div>
