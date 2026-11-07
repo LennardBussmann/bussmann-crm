@@ -496,6 +496,7 @@ const PROJ_CLOSED = ['Gewonnen', 'Verloren', 'Zurückgestellt'];
 const PROJ_CLOSED_SQL = `p.status IN (${PROJ_CLOSED.map((s) => `'${s}'`).join(',')})`;
 const PROJ_FIN = ['Offen', 'Bar / Überweisung', 'Finanzierung', 'Leasing', 'Miete / Mietkauf'];
 const PROJECT_SQL = `SELECT p.*, u.name user_name,
+  (SELECT s.id FROM sales s WHERE s.project_id=p.id AND s.kind='verkauf' LIMIT 1) sale_id,
   COALESCE(NULLIF(TRIM(COALESCE(c.company,'') || CASE WHEN COALESCE(c.company,'')<>'' AND (COALESCE(c.first_name,'')<>'' OR COALESCE(c.last_name,'')<>'') THEN ' – ' ELSE '' END || TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,''))), ''), p.kunde) kunde_name,
   COALESCE(NULLIF(c.city,''), p.ort) ort_name
   FROM projects p LEFT JOIN users u ON u.id=p.user_id LEFT JOIN customers c ON c.id=p.customer_id`;
@@ -540,6 +541,28 @@ function syncProjectTask(id) {
   } else if (!get(`SELECT 1 FROM tasks WHERE project_id=? AND status='done' AND due_date=?`, id, p.faellig)) { // erledigte Wiedervorlage nicht neu anlegen
     run(`INSERT INTO tasks(customer_id, project_id, kind, title, description, due_date, assigned_to, created_by, remind_day_before) VALUES(?,?,?,?,?,?,?,?,1)`,
       p.customer_id, id, 'angebot', title, description, p.faellig, p.user_id, null);
+  }
+}
+/** Gewonnen -> automatisch Verkauf (und Inzahlungnahme als Einkauf) unter „Verkäufe“; zurückgesetzt -> wieder entfernen */
+function syncProjectSale(id, oldStatus, userId) {
+  const p = get(`${PROJECT_SQL} WHERE p.id=?`, id);
+  if (!p) return;
+  const linked = all('SELECT * FROM sales WHERE project_id=?', id);
+  if (p.status === 'Gewonnen' && !linked.length) {
+    const date = U.today();
+    const base = { date, user_id: p.user_id, customer_id: p.customer_id, party: p.customer_id ? '' : [p.kunde, p.ort].filter(Boolean).join(', '), condition: 'neu', category: p.typ || null, brand: p.brand || null, model: p.modell || null, serial: null, year: null, extra_costs: 0, purchase_id: null };
+    const ins = (s) => Number(run(`INSERT INTO sales(${SALE_FIELDS.join(',')}, project_id, created_by) VALUES(${SALE_FIELDS.map(() => '?').join(',')}, ?, ?)`, ...SALE_FIELDS.map((f) => s[f] ?? null), id, userId).lastInsertRowid);
+    const sid = ins({ ...base, kind: 'verkauf', purchase_price: null, sale_price: p.preis ?? 0,
+      notes: [`Aus Verkaufsprojekt Nr. ${p.id}`, p.ausstattung ? `Ausstattung: ${p.ausstattung}` : '', p.finanzierung !== 'Offen' ? `Finanzierung: ${p.finanzierung}` : '', p.inzahlung ? `Inzahlungnahme: ${p.inzahlung}${p.inz_wert != null ? ' (' + p.inz_wert.toLocaleString('de-DE') + ' €)' : ''}` : ''].filter(Boolean).join('\n') });
+    const mid = machineFromSale({ ...base, kind: 'verkauf' }, userId);
+    if (mid) run('UPDATE sales SET machine_id=? WHERE id=?', mid, sid);
+    if (p.inzahlung || p.inz_wert != null) {
+      ins({ ...base, kind: 'einkauf', condition: 'gebraucht', category: null, brand: null, model: p.inzahlung || 'Inzahlungnahme', purchase_price: p.inz_wert ?? 0, sale_price: null, notes: `Inzahlungnahme aus Verkaufsprojekt Nr. ${p.id}` });
+    }
+  } else if (oldStatus === 'Gewonnen' && p.status !== 'Gewonnen' && linked.length) {
+    // Projekt doch nicht gewonnen: automatisch angelegte Einträge wieder entfernen (Maschine beim Kunden bleibt)
+    run('UPDATE sales SET purchase_id=NULL WHERE purchase_id IN (SELECT id FROM sales WHERE project_id=?)', id);
+    run('DELETE FROM sales WHERE project_id=?', id);
   }
 }
 function projectsQuery(q) {
@@ -627,6 +650,7 @@ app.post('/api/projects', auth, (req, res) => {
     const id = Number(run(`INSERT INTO projects(${PROJ_FIELDS.join(',')}, created_by) VALUES(${PROJ_FIELDS.map(() => '?').join(',')}, ?)`, ...PROJ_FIELDS.map((f) => p[f]), req.user.id).lastInsertRowid);
     if (p.customer_id) L.systemEntry(p.customer_id, req.user.id, `Verkaufsprojekt angelegt: ${[p.brand, p.typ, p.modell].filter(Boolean).join(' ')} (${p.status})`);
     syncProjectTask(id);
+    syncProjectSale(id, null, req.user.id);
     return id;
   });
   res.json({ id });
@@ -640,6 +664,7 @@ app.put('/api/projects/:id', auth, (req, res) => {
     run(`UPDATE projects SET ${PROJ_FIELDS.map((f) => f + '=?').join(',')}, updated_at=datetime('now','localtime') WHERE id=?`, ...PROJ_FIELDS.map((f) => p[f]), old.id);
     if (p.customer_id && old.status !== p.status) L.systemEntry(p.customer_id, req.user.id, `Verkaufsprojekt ${[p.brand, p.modell].filter(Boolean).join(' ')}: Status „${p.status}“`);
     syncProjectTask(old.id);
+    syncProjectSale(old.id, old.status, req.user.id);
   });
   res.json({ ok: true });
 });

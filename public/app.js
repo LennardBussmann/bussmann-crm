@@ -1451,12 +1451,13 @@ async function openProjectForm(p, onSaved) {
   const probs = Object.fromEntries(meta.statuses);
   const upd = () => {
     $('#pf-prob', md.el).textContent = `· Wahrscheinlichkeit ${Math.round((probs[f.status.value] ?? 0) * 100)} %`;
-    $('#pf-won', md.el).innerHTML = f.status.value === 'Gewonnen' && isEdit
-      ? `<div class="callout ok">${icon('check')} Gewonnen! <button type="button" class="btn sm primary" id="pf-sale" style="margin-left:8px">${icon('euro')} Als Verkauf erfassen</button>${p.inzahlung ? ' <button type="button" class="btn sm" id="pf-buy">' + icon('box') + ' Inzahlungnahme als Einkauf</button>' : ''}<div class="small muted" style="margin-top:6px">Übernimmt Kunde, Maschine und Angebotspreis in „Verkäufe“ – dort noch den Einkaufspreis eintragen.</div></div>` : '';
+    $('#pf-won', md.el).innerHTML = f.status.value === 'Gewonnen'
+      ? (p.sale_id
+        ? `<div class="callout ok">${icon('check')} Gewonnen – steht unter „Verkäufe“. <button type="button" class="btn sm primary" id="pf-sale" style="margin-left:8px">${icon('euro')} Verkauf öffnen</button><div class="small muted" style="margin-top:6px">Dort noch den Einkaufspreis eintragen, damit der Deckungsbeitrag berechnet wird.</div></div>`
+        : `<div class="callout ok">${icon('check')} Beim Speichern wird der Verkauf automatisch unter „Verkäufe“ eingetragen${f.inzahlung.value || f.inz_wert.value ? ', die Inzahlungnahme als Einkauf (Lager)' : ''}${picker.get() ? ' und die Maschine beim Kunden' : ''}. Danach dort nur noch den Einkaufspreis ergänzen.</div>`)
+      : (p.sale_id ? `<div class="callout warn">${icon('info')} Wenn das Projekt nicht mehr „Gewonnen“ ist, wird der automatisch angelegte Verkauf wieder entfernt.</div>` : '');
     const s1 = $('#pf-sale', md.el);
-    if (s1) s1.onclick = () => { md.close(); openSaleForm({ kind: 'verkauf', customer_id: p.customer_id, customer_name: p.kunde_name, party: p.customer_id ? '' : p.kunde, brand: p.brand, category: p.typ, model: p.modell, sale_price: parseEur(f.preis.value), date: todayISO(), user_id: p.user_id, notes: [p.ausstattung, p.inzahlung ? `Inzahlungnahme: ${p.inzahlung}${p.inz_wert ? ' (' + eur(p.inz_wert) + ')' : ''}` : '', `Verkaufsprojekt Nr. ${p.id}`].filter(Boolean).join('\n') }, onSaved); };
-    const s2 = $('#pf-buy', md.el);
-    if (s2) s2.onclick = () => { md.close(); openSaleForm({ kind: 'einkauf', condition: 'gebraucht', customer_id: p.customer_id, customer_name: p.kunde_name, party: p.customer_id ? '' : p.kunde, model: p.inzahlung, purchase_price: p.inz_wert, date: todayISO(), user_id: p.user_id, notes: `Inzahlungnahme aus Verkaufsprojekt Nr. ${p.id}` }, onSaved); };
+    if (s1) s1.onclick = async () => { md.close(); openSaleForm(await api('/sales/' + p.sale_id), onSaved); };
   };
   f.status.onchange = upd; upd();
   $('#pf-save', md.el).onclick = async () => {
@@ -1466,7 +1467,7 @@ async function openProjectForm(p, onSaved) {
     try {
       if (isEdit) await api('/projects/' + p.id, { method: 'PUT', body });
       else await api('/projects', { method: 'POST', body });
-      md.close(); toast(body.faellig && !['Gewonnen', 'Verloren', 'Zurückgestellt'].includes(body.status) ? 'Gespeichert – Wiedervorlage steht im Kalender' : 'Gespeichert');
+      md.close(); toast(body.status === 'Gewonnen' && !p.sale_id ? 'Gewonnen! Der Verkauf steht jetzt unter „Verkäufe“ – bitte dort den Einkaufspreis ergänzen' : body.faellig && !['Gewonnen', 'Verloren', 'Zurückgestellt'].includes(body.status) ? 'Gespeichert – Wiedervorlage steht im Kalender' : 'Gespeichert');
       projMeta = null; onSaved && onSaved();
     } catch (e) { fail(e); }
   };

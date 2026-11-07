@@ -352,6 +352,18 @@ const U = require('../lib/util');
     assert.ok(!(await call('k', 'GET', '/api/tasks?scope=mine&status=open')).some((t) => t.project_id === pr1), 'Gewonnen -> Wiedervorlage entfällt');
     pl = await call('a', 'GET', '/api/projects?status=*');
     assert.equal(pl.stats.won, 1); assert.equal(pl.stats.quote, 50);
+    // Gewonnen -> automatisch Verkauf + Inzahlungnahme als Einkauf
+    let auto = (await call('a', 'GET', '/api/sales?from=2000-01-01&to=2100-01-01')).rows.filter((r) => r.project_id === pr1);
+    assert.equal(auto.length, 2);
+    const av = auto.find((r) => r.kind === 'verkauf'); const ae = auto.find((r) => r.kind === 'einkauf');
+    assert.equal(av.sale_price, 42000); assert.equal(av.purchase_price, null); assert.equal(av.user_id, kollege.id); assert.equal(av.customer_id, scust); assert.equal(av.brand, 'Weidemann');
+    assert.equal(ae.purchase_price, 8000); assert.ok(ae.model.includes('1140'));
+    assert.equal((await call('a', 'GET', `/api/projects/${pr1}`)).sale_id, av.id);
+    await call('a', 'PUT', `/api/projects/${pr1}`, { notizen: 'x' });
+    assert.equal((await call('a', 'GET', '/api/sales?from=2000-01-01&to=2100-01-01')).rows.filter((r) => r.project_id === pr1).length, 2, 'nicht doppelt');
+    await call('a', 'PUT', `/api/projects/${pr1}`, { status: 'Verhandlung' });
+    assert.equal((await call('a', 'GET', '/api/sales?from=2000-01-01&to=2100-01-01')).rows.filter((r) => r.project_id === pr1).length, 0, 'zurückgesetzt -> entfernt');
+    await call('a', 'PUT', `/api/projects/${pr1}`, { status: 'Gewonnen' });
     assert.equal((await call('a', 'GET', `/api/customers/${scust}`)).projects.length, 1);
     assert.ok((await call('a', 'GET', '/api/projects/report.html?status=*')).includes('Massey Ferguson'));
     await assert.rejects(call('k', 'DELETE', `/api/projects/${pr3}`), /403/);
