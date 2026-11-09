@@ -549,7 +549,7 @@ function customerPicker(container, initial, onChange) {
     }, 200);
   };
   render();
-  return { get: () => (selected ? selected.id : null) };
+  return { get: () => (selected ? selected.id : null), set: (c) => { selected = c; render(); onChange && onChange(c); } };
 }
 
 function taskFields(t = {}, prefix = '') {
@@ -1395,6 +1395,13 @@ async function openProjectForm(p, onSaved) {
   const md = modal({
     title: isEdit ? `Projekt Nr. ${p.id} bearbeiten` : 'Neues Verkaufsprojekt', wide: true,
     body: `<form id="pf"><div class="form-grid">
+      <div class="full offer-drop" id="pf-offer" tabindex="0" role="button">
+        <input type="file" accept="application/pdf,image/*" hidden>
+        <div class="offer-ico">${icon('file', 'lg')}</div>
+        <div><b>${isEdit ? 'Neues Angebot hochladen' : 'Angebot hochladen'}</b> <span class="muted">(PDF oder Foto)</span>
+          <div class="small muted">Kunde, Maschine, Preis und Ausstattung werden automatisch ausgelesen und unten eingetragen. Das Angebot wird am Projekt und beim Kunden abgelegt.</div></div>
+      </div>
+      <div class="full" id="pf-offer-msg">${p.offer_name ? `<div class="small">${icon('file')} Gespeichertes Angebot: <a href="/api/projects/${p.id}/offer" target="_blank" rel="noopener">${esc(p.offer_name)}</a></div>` : ''}</div>
       <div class="sec full">Kunde</div>
       <div class="field full"><label>Kunde aus dem CRM</label><div id="pf-cust"></div></div>
       <div class="field pf-free"><label>… oder Kunde / Betrieb <span class="muted">(noch nicht im CRM)</span></label><input type="text" name="kunde" value="${esc(p.customer_id ? '' : p.kunde || '')}"></div>
@@ -1460,8 +1467,90 @@ async function openProjectForm(p, onSaved) {
     if (s1) s1.onclick = async () => { md.close(); openSaleForm(await api('/sales/' + p.sale_id), onSaved); };
   };
   f.status.onchange = upd; upd();
+
+  // ---- Angebot hochladen und auswerten ----
+  let offerFile = null;
+  const drop = $('#pf-offer', md.el); const fileIn = $('input[type=file]', drop); const omsg = $('#pf-offer-msg', md.el);
+  const mark = (el) => { el.classList.add('ai-filled'); el.addEventListener('input', () => el.classList.remove('ai-filled'), { once: true }); };
+  const setF = (name, v, force) => {
+    const el = f[name]; if (!el || v == null || v === '') return false;
+    if (!force && isEdit && el.value) return false;
+    el.value = v; mark(el); return true;
+  };
+  const custLabel = (a) => [...new Set([a.company, [a.first_name, a.last_name].filter(Boolean).join(' ')].filter(Boolean))].join(' – ');
+  const applyOffer = (r) => {
+    const x = r.fields; const filled = [];
+    if (x.brand && (!isEdit || !f.brand.value)) {
+      const opt = [...bSel.options].find((o) => o.value.toLowerCase() === x.brand.toLowerCase());
+      bSel.value = opt ? opt.value : '__other'; brandUpd(); if (!opt) f.brand.value = x.brand; mark(bSel); filled.push('Marke');
+    }
+    if (setF('typ', x.typ)) filled.push('Typ');
+    if (setF('modell', x.modell)) filled.push('Modell');
+    if (setF('ausstattung', x.ausstattung)) filled.push('Ausstattung');
+    if (setF('preis', x.preis != null ? eur2(x.preis) : '', true)) filled.push('Preis');
+    if (setF('angebot_vom', x.angebot_vom, true)) filled.push('Angebotsdatum');
+    if (setF('inzahlung', x.inzahlung)) filled.push('Inzahlungnahme');
+    setF('inz_wert', x.inz_wert != null ? eur2(x.inz_wert) : '');
+    if (x.finanzierung && f.finanzierung.value === 'Offen') { f.finanzierung.value = x.finanzierung; mark(f.finanzierung); }
+    setF('liefer', x.liefer);
+    setF('ansprech', x.ansprech); setF('telefon', x.telefon);
+    if (x.notizen) { f.notizen.value = f.notizen.value ? f.notizen.value + '\n' + x.notizen : x.notizen; mark(f.notizen); }
+    if ((probs[f.status.value] ?? 0) < 0.5 && !['Verloren', 'Zurückgestellt'].includes(f.status.value)) { f.status.value = 'Angebot erstellt'; mark(f.status); upd(); }
+    if (!f.faellig.value) { const d = addDays(x.angebot_vom || todayISO(), 7); f.faellig.value = d <= todayISO() ? addDays(todayISO(), 1) : d; mark(f.faellig); }
+    if (!f.naechster.value) { f.naechster.value = 'Angebot nachfassen'; mark(f.naechster); }
+    // Kunde zuordnen
+    let cust = '';
+    if (!picker.get()) {
+      const m = r.matches || [];
+      if (m.length && (m.length === 1 || m[0].score >= m[1].score + 3)) {
+        picker.set({ id: m[0].id, name: m[0].name });
+        cust = `<div class="small">${icon('user')} Kunde im CRM gefunden: <b>${esc(m[0].name)}</b>${m[0].city ? ', ' + esc(m[0].city) : ''} – bitte prüfen.</div>`;
+        filled.unshift('Kunde');
+      } else {
+        setF('kunde', x.kunde); setF('ort', x.ort);
+        const a = r.address || {};
+        const canNew = a.company || a.last_name;
+        cust = (m.length ? `<div class="small" style="margin-bottom:6px">Welcher Kunde ist es?</div><div class="more-links" id="pf-mlist">${m.map((c) => `<button type="button" class="btn sm" data-mcust="${c.id}" data-name="${esc(c.name)}">${icon('user')} ${esc(c.name)}${c.city ? ' · ' + esc(c.city) : ''}</button>`).join('')}</div>` : '')
+          + (canNew ? `<div class="small" id="pf-nc-wrap" style="margin-top:6px">${m.length ? 'Oder: ' : 'Der Kunde ist noch nicht im CRM. '}<button type="button" class="btn sm" id="pf-newcust">${icon('plus')} ${esc(custLabel(a))}${a.city ? ', ' + esc(a.city) : ''} als Kunde anlegen</button></div>` : '');
+        if (x.kunde) filled.unshift('Kunde');
+      }
+    }
+    omsg.innerHTML = `<div class="callout ok">${icon('check')} Angebot ausgelesen${filled.length ? ': ' + esc(filled.join(', ')) : ''}. Die gelb markierten Felder bitte kurz prüfen, dann speichern.${cust ? '<div style="margin-top:8px">' + cust + '</div>' : ''}</div>`;
+    const chosen = (name) => { f.kunde.value = ''; f.ort.value = ''; $('#pf-mlist', omsg)?.remove(); const w = $('#pf-nc-wrap', omsg); if (w) w.remove(); const box = $('.callout', omsg); box.insertAdjacentHTML('beforeend', `<div class="small" style="margin-top:8px">${icon('user')} Kunde: <b>${esc(name)}</b></div>`); };
+    $$('[data-mcust]', omsg).forEach((b) => b.onclick = () => { picker.set({ id: Number(b.dataset.mcust), name: b.dataset.name }); chosen(b.dataset.name); });
+    const nc = $('#pf-newcust', omsg);
+    if (nc) nc.onclick = async () => {
+      try {
+        const a = r.address; const tel = (a.phone || '').replace(/\s/g, '');
+        const { id } = await api('/customers', { method: 'POST', body: { company: a.company, first_name: a.first_name, last_name: a.last_name || a.company, street: a.street, zip: a.zip, city: a.city, email: a.email, [/^(\+49|0049|0)1/.test(tel) ? 'mobile' : 'phone']: a.phone } });
+        picker.set({ id, name: custLabel(a) }); chosen(custLabel(a) + ' (neu angelegt)');
+        toast('Kunde angelegt');
+      } catch (e) { fail(e); }
+    };
+  };
+  const handleOffer = async (file) => {
+    if (!file) return;
+    if (!/^(application\/pdf|image\/)/.test(file.type)) { toast('Bitte ein PDF oder Foto auswählen', true); return; }
+    const up = await shrinkImage(file);
+    drop.classList.add('busy');
+    omsg.innerHTML = `<div class="callout info"><span class="spin"></span> „${esc(file.name)}“ wird ausgewertet …${meta.ai && !/pdf/.test(file.type) ? ' das kann eine halbe Minute dauern.' : ''}</div>`;
+    try {
+      const r = await api('/projects/parse-offer', { method: 'POST', raw: true, body: up, headers: { 'Content-Type': up.type, 'X-Filename': encodeURIComponent(up.name) } });
+      offerFile = r.file;
+      if (r.fields) applyOffer(r);
+      else if (r.error && r.error !== 'not_recognized') omsg.innerHTML = `<div class="callout warn">${icon('info')} ${esc(r.error)}<div class="small" style="margin-top:4px">Das Angebot wird trotzdem beim Speichern am Projekt abgelegt.</div></div>`;
+      else omsg.innerHTML = `<div class="callout warn">${icon('info')} Die Angaben konnten nicht automatisch ausgelesen werden – bitte die Felder von Hand ausfüllen. „${esc(r.file.name)}“ wird beim Speichern trotzdem am Projekt abgelegt.${!r.ai && state.me.role === 'admin' ? '<div class="small" style="margin-top:4px">Fotos und Angebote anderer Firmen kann die KI-Auswertung lesen: <a href="#/einstellungen">Einstellungen → KI-Auswertung</a>.</div>' : ''}</div>`;
+    } catch (e) { omsg.innerHTML = ''; fail(e); } finally { drop.classList.remove('busy'); fileIn.value = ''; }
+  };
+  drop.onclick = (e) => { if (e.target === fileIn || drop.classList.contains('busy')) return; fileIn.click(); };
+  drop.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileIn.click(); } };
+  fileIn.onchange = () => handleOffer(fileIn.files[0]);
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = () => drop.classList.remove('over');
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('over'); handleOffer(e.dataTransfer.files[0]); };
+
   $('#pf-save', md.el).onclick = async () => {
-    const body = { ...formData(f), customer_id: picker.get() };
+    const body = { ...formData(f), customer_id: picker.get(), offer_file: offerFile };
     if (!body.brand.trim()) { toast('Bitte die Marke auswählen', true); bSel.focus(); return; }
     localStorage.setItem('pBrand', body.brand);
     try {
@@ -1927,7 +2016,8 @@ async function viewSettings(main) {
         ${state.users.map((u) => `<tr style="cursor:default"><td>${avatar(u.name, u.id, 'xs')} <b>${esc(u.name)}</b></td><td>${esc(u.email)}</td><td>${u.role === 'admin' ? 'Administrator' : 'Mitarbeiter'}</td><td>${u.active ? '<span class="chip ok">aktiv</span>' : '<span class="chip">deaktiviert</span>'}</td><td style="text-align:right"><button class="btn sm" data-uedit="${u.id}">${icon('edit')} Bearbeiten</button></td></tr>`).join('')}
         </tbody></table></div>
 
-      <div class="card"><div class="card-head"><h2>${icon('mail', 'lg')} E-Mail-Versand (SMTP)</h2><span class="chip ${state.mailEnabled ? 'ok' : 'warn'}">${state.mailEnabled ? 'aktiv' : 'nicht eingerichtet'}</span></div><div class="card-body" id="smtp-body">Lädt …</div></div>` : ''}
+      <div class="card"><div class="card-head"><h2>${icon('mail', 'lg')} E-Mail-Versand (SMTP)</h2><span class="chip ${state.mailEnabled ? 'ok' : 'warn'}">${state.mailEnabled ? 'aktiv' : 'nicht eingerichtet'}</span></div><div class="card-body" id="smtp-body">Lädt …</div></div>
+      <div class="card"><div class="card-head"><h2>${icon('file', 'lg')} KI-Auswertung von Angeboten</h2><span class="chip" id="ai-chip"></span></div><div class="card-body" id="ai-body">Lädt …</div></div>` : ''}
     </div>`;
 
   $('#app-install').onclick = async () => { if (!installPrompt) return; installPrompt.prompt(); const r = await installPrompt.userChoice; if (r.outcome === 'accepted') toast('Bussmann CRM wurde installiert'); installPrompt = null; $('#app-install').classList.add('hidden'); };
@@ -1959,6 +2049,20 @@ async function viewSettings(main) {
     if (!b.smtp_pass) delete b.smtp_pass;
     try { const r = await api('/settings', { method: 'PUT', body: b }); state.mailEnabled = r.mailEnabled; toast('Gespeichert'); viewSettings(main); } catch (err) { fail(err); }
   };
+  $('#ai-chip').className = 'chip ' + (s.ai_key_set || s.ai_env ? 'ok' : 'warn');
+  $('#ai-chip').textContent = s.ai_key_set || s.ai_env ? 'aktiv' : 'aus';
+  $('#ai-body').innerHTML = `
+    <p class="small" style="margin-top:0">Angebote aus eurer Warenwirtschaft (PDF) werden immer automatisch ausgelesen – kostenlos. Für <b>Fotos</b> und <b>Angebote anderer Firmen</b> kann zusätzlich die KI von Anthropic (Claude) eingesetzt werden. Kosten: etwa 2–5 Cent pro Angebot, abgerechnet über euer Anthropic-Konto.</p>
+    ${s.ai_env ? '<p class="callout info small">Der Schlüssel ist auf dem Server hinterlegt (ANTHROPIC_API_KEY).</p>' : `
+    <form id="ai-form" class="form-grid">
+      <div class="field full"><label>API-Schlüssel ${s.ai_key_set ? '<span class="muted">(gespeichert – leer lassen zum Beibehalten)</span>' : '<span class="muted">(von console.anthropic.com → API Keys)</span>'}</label><input type="password" name="ai_key" autocomplete="off" placeholder="sk-ant-…"></div>
+      <div class="full" style="display:flex;gap:8px"><button class="btn primary" type="submit">Speichern</button>${s.ai_key_set ? '<button class="btn" type="button" id="ai-clear">Schlüssel entfernen</button>' : ''}</div>
+    </form>`}`;
+  const aiF = $('#ai-form');
+  if (aiF) {
+    aiF.onsubmit = async (e) => { e.preventDefault(); const k = aiF.ai_key.value.trim(); if (!k) return; try { await api('/settings', { method: 'PUT', body: { ai_key: k } }); projMeta = null; toast('KI-Auswertung eingeschaltet'); viewSettings(main); } catch (err) { fail(err); } };
+    const cl = $('#ai-clear'); if (cl) cl.onclick = async () => { try { await api('/settings', { method: 'PUT', body: { ai_key_clear: true } }); projMeta = null; toast('Schlüssel entfernt'); viewSettings(main); } catch (err) { fail(err); } };
+  }
   $('#smtp-test').onclick = async () => { try { const r = await api('/settings/testmail', { method: 'POST', body: {} }); toast('Testmail gesendet an ' + r.to); } catch (e) { fail(e); } };
 }
 

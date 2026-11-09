@@ -471,6 +471,13 @@ table.list tbody tr.p-won { background: #f1f8ec; } table.list tbody tr.p-lost td
 .ampel.rot { background: #c0292f; box-shadow: 0 0 0 3px #f6d4d5; } .ampel.gelb { background: #e8a800; box-shadow: 0 0 0 3px #fbecc0; } .ampel.gruen { background: #3f8f2e; box-shadow: 0 0 0 3px #d6ebd0; }
 .form-grid .sec { font-weight: 900; color: var(--red); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; border-bottom: 2px solid var(--red); padding-bottom: 3px; margin-top: 4px; }
 .callout.ok { background: #eef7ea; border-color: #b9dbab; color: #2e5e1c; }
+.offer-drop { display: flex; gap: 12px; align-items: center; padding: 14px 16px; border: 2px dashed #d9b3b5; border-radius: var(--radius); background: #fdf6f6; cursor: pointer; transition: background .15s, border-color .15s; }
+.offer-drop:hover, .offer-drop.over, .offer-drop:focus-visible { background: #fbeaea; border-color: #c0292f; outline: none; }
+.offer-drop.busy { opacity: .6; cursor: progress; }
+.offer-drop .offer-ico { color: #c0292f; flex: none; }
+.ai-filled { background: #fff8d6 !important; border-color: #e8c95a !important; }
+.spin { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -2px; animation: spin .8s linear infinite; margin-right: 4px; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .brand-tag { font-weight: 900; color: var(--red); }
 td .wrap { white-space: normal; max-width: 220px; }
 .hide-l-only { display: none; }

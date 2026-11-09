@@ -167,6 +167,7 @@ const SETTING_KEYS = ['app_url', 'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_
 app.get('/api/settings', auth, admin, (req, res) => {
   const o = {}; for (const k of SETTING_KEYS) o[k] = getSetting(k);
   o.smtp_pass_set = !!getSetting('smtp_pass');
+  o.ai_key_set = !!getSetting('ai_key'); o.ai_env = !!process.env.ANTHROPIC_API_KEY;
   o.env_override = !!process.env.SMTP_HOST;
   res.json(o);
 });
@@ -175,6 +176,8 @@ app.put('/api/settings', auth, admin, (req, res) => {
   for (const k of SETTING_KEYS) if (b[k] !== undefined) setSetting(k, String(b[k]).trim());
   if (b.smtp_pass) setSetting('smtp_pass', b.smtp_pass);
   if (b.smtp_pass_clear) setSetting('smtp_pass', '');
+  if (b.ai_key) setSetting('ai_key', String(b.ai_key).trim());
+  if (b.ai_key_clear) setSetting('ai_key', '');
   res.json({ ok: true, mailEnabled: mailEnabled() });
 });
 app.post('/api/settings/testmail', auth, admin, wrap(async (req, res) => {
@@ -490,6 +493,9 @@ app.delete('/api/machines/:id', auth, (req, res) => {
 });
 
 // ---------- Verkaufsprojekte (alle Marken) ----------
+/** Anzeigename eines Kunden (Alias c): „Firma – Vorname Nachname“, ohne Dopplung wenn Nachname = Firma */
+const CUST_PERSON_SQL = `TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,''))`;
+const CUST_LABEL_SQL = `NULLIF(TRIM(COALESCE(c.company,'') || CASE WHEN COALESCE(c.company,'')<>'' AND ${CUST_PERSON_SQL}<>'' AND ${CUST_PERSON_SQL}<>TRIM(c.company) THEN ' – ' || ${CUST_PERSON_SQL} WHEN COALESCE(c.company,'')='' THEN ${CUST_PERSON_SQL} ELSE '' END), '')`;
 const PROJ_STATUS = [['Lead / Interesse', 0.10], ['Bedarf geklärt', 0.25], ['Vorführung', 0.40], ['Angebot erstellt', 0.50], ['Verhandlung', 0.75], ['Gewonnen', 1], ['Verloren', 0], ['Zurückgestellt', 0.05]];
 const PROJ_PROB = Object.fromEntries(PROJ_STATUS);
 const PROJ_CLOSED = ['Gewonnen', 'Verloren', 'Zurückgestellt'];
@@ -497,7 +503,7 @@ const PROJ_CLOSED_SQL = `p.status IN (${PROJ_CLOSED.map((s) => `'${s}'`).join(',
 const PROJ_FIN = ['Offen', 'Bar / Überweisung', 'Finanzierung', 'Leasing', 'Miete / Mietkauf'];
 const PROJECT_SQL = `SELECT p.*, u.name user_name,
   (SELECT s.id FROM sales s WHERE s.project_id=p.id AND s.kind='verkauf' LIMIT 1) sale_id,
-  COALESCE(NULLIF(TRIM(COALESCE(c.company,'') || CASE WHEN COALESCE(c.company,'')<>'' AND (COALESCE(c.first_name,'')<>'' OR COALESCE(c.last_name,'')<>'') THEN ' – ' ELSE '' END || TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,''))), ''), p.kunde) kunde_name,
+  COALESCE(${CUST_LABEL_SQL}, p.kunde) kunde_name,
   COALESCE(NULLIF(c.city,''), p.ort) ort_name
   FROM projects p LEFT JOIN users u ON u.id=p.user_id LEFT JOIN customers c ON c.id=p.customer_id`;
 /** Ampel der Wiedervorlage: rot = überfällig, gelb = in 7 Tagen, grün = später, '' = ohne Termin/abgeschlossen */
@@ -584,7 +590,7 @@ function projectStats(user) {
     overdue: all_.filter((p) => p.ampel === 'rot').length, soon: all_.filter((p) => p.ampel === 'gelb').length, trade_in: s(open, 'inz_wert') };
 }
 app.get('/api/projects', auth, (req, res) => {
-  res.json({ rows: projectsQuery(req.query), stats: projectStats(req.query.user), statuses: PROJ_STATUS, financing: PROJ_FIN,
+  res.json({ rows: projectsQuery(req.query), stats: projectStats(req.query.user), statuses: PROJ_STATUS, financing: PROJ_FIN, ai: !!aiKey(), pdftext: offerText.available(),
     brands: all("SELECT DISTINCT brand FROM projects WHERE brand<>'' ORDER BY brand").map((r) => r.brand) });
 });
 app.get('/api/projects/report.html', auth, (req, res) => {
@@ -649,6 +655,7 @@ app.post('/api/projects', auth, (req, res) => {
   const id = tx(() => {
     const id = Number(run(`INSERT INTO projects(${PROJ_FIELDS.join(',')}, created_by) VALUES(${PROJ_FIELDS.map(() => '?').join(',')}, ?)`, ...PROJ_FIELDS.map((f) => p[f]), req.user.id).lastInsertRowid);
     if (p.customer_id) L.systemEntry(p.customer_id, req.user.id, `Verkaufsprojekt angelegt: ${[p.brand, p.typ, p.modell].filter(Boolean).join(' ')} (${p.status})`);
+    attachOffer(id, req.body && req.body.offer_file, req.user.id);
     syncProjectTask(id);
     syncProjectSale(id, null, req.user.id);
     return id;
@@ -663,6 +670,7 @@ app.put('/api/projects/:id', auth, (req, res) => {
   tx(() => {
     run(`UPDATE projects SET ${PROJ_FIELDS.map((f) => f + '=?').join(',')}, updated_at=datetime('now','localtime') WHERE id=?`, ...PROJ_FIELDS.map((f) => p[f]), old.id);
     if (p.customer_id && old.status !== p.status) L.systemEntry(p.customer_id, req.user.id, `Verkaufsprojekt ${[p.brand, p.modell].filter(Boolean).join(' ')}: Status „${p.status}“`);
+    attachOffer(old.id, req.body && req.body.offer_file, req.user.id);
     syncProjectTask(old.id);
     syncProjectSale(old.id, old.status, req.user.id);
   });
@@ -673,7 +681,118 @@ app.delete('/api/projects/:id', auth, (req, res) => {
   if (!old) return res.status(404).json({ error: 'Projekt nicht gefunden' });
   if (req.user.role !== 'admin' && old.created_by !== req.user.id && old.user_id !== req.user.id) return res.status(403).json({ error: 'Nur der Verkäufer oder ein Administrator kann das Projekt löschen' });
   tx(() => { run(`DELETE FROM tasks WHERE project_id=? AND status='open'`, old.id); run('UPDATE tasks SET project_id=NULL WHERE project_id=?', old.id); run('DELETE FROM projects WHERE id=?', old.id); });
+  if (old.offer_stored) { try { fs.rmSync(path.join(DATA_DIR, 'files', old.offer_stored)); } catch { /* egal */ } }
   res.json({ ok: true });
+});
+
+// ---------- Angebot hochladen und automatisch auswerten ----------
+const offer = require('./lib/offer');
+const offerText = require('./lib/offer-text');
+const aiKey = () => process.env.ANTHROPIC_API_KEY || getSetting('ai_key') || '';
+const OFFER_RE = /^offer_[A-Za-z0-9_-]{8,40}$/;
+const OFFER_TYPES = ['application/pdf', ...offer.IMAGE_TYPES];
+/** Hochgeladene, aber nie gespeicherte Angebote nach einem Tag wegräumen */
+function cleanupOffers() {
+  const dir = path.join(DATA_DIR, 'files');
+  const used = new Set(all('SELECT offer_stored s FROM projects WHERE offer_stored IS NOT NULL').map((r) => r.s));
+  for (const n of fs.readdirSync(dir)) {
+    if (!n.startsWith('offer_') || used.has(n)) continue;
+    try { if (Date.now() - fs.statSync(path.join(dir, n)).mtimeMs > 864e5) fs.rmSync(path.join(dir, n)); } catch { /* egal */ }
+  }
+}
+/** Angebotsdatei ans Projekt hängen (und beim Kunden unter „Dateien“ ablegen) */
+function attachOffer(id, of, userId) {
+  if (!of || !OFFER_RE.test(String(of.token || ''))) return;
+  const src = path.join(DATA_DIR, 'files', of.token);
+  if (!fs.existsSync(src)) return;
+  const old = get('SELECT * FROM projects WHERE id=?', id);
+  if (old.offer_stored === of.token) return;
+  const name = U.str(of.name, 200)?.replace(/[\\/\0]/g, '_') || 'Angebot.pdf';
+  const mime = OFFER_TYPES.includes(of.mime) ? of.mime : 'application/octet-stream';
+  run('UPDATE projects SET offer_stored=?, offer_name=?, offer_mime=? WHERE id=?', of.token, name, mime, id);
+  if (old.offer_stored && old.offer_stored !== of.token) fs.rm(path.join(DATA_DIR, 'files', old.offer_stored), () => {});
+  if (old.customer_id) { // Kopie in die Kundenakte
+    const stored = `${old.customer_id}_${U.token(12)}`;
+    fs.copyFileSync(src, path.join(DATA_DIR, 'files', stored));
+    run('INSERT INTO files(customer_id, filename, stored_name, mime, size, uploaded_by) VALUES(?,?,?,?,?,?)', old.customer_id, name, stored, mime, fs.statSync(src).size, userId);
+    L.systemEntry(old.customer_id, userId, `Angebot hochgeladen: ${name}`);
+  }
+}
+const digits = (s) => String(s || '').replace(/\D/g, '').replace(/^49/, '0');
+/** passende Kunden im CRM zum ausgelesenen Angebot */
+function matchCustomers(x) {
+  const lc = (s) => String(s || '').trim().toLowerCase();
+  const firma = lc(x.firma), nach = lc(x.nachname), vor = lc(x.vorname), ort = lc(x.ort), plz = String(x.plz || '').trim(), mail = lc(x.email), tel = digits(x.telefon);
+  if (!firma && !nach && !mail && tel.length < 6) return [];
+  const rows = all(`SELECT id, company, first_name, last_name, zip, city, email, mobile, phone FROM customers
+    WHERE (?<>'' AND lower(company) LIKE ?) OR (?<>'' AND lower(last_name)=?) OR (?<>'' AND lower(email)=?)`,
+  firma, `%${firma}%`, nach, nach, mail, mail);
+  const scored = rows.map((c) => {
+    let s = 0;
+    if (firma && lc(c.company) === firma) s += 5; else if (firma && lc(c.company).includes(firma)) s += 3;
+    if (nach && lc(c.last_name) === nach) s += 3;
+    if (vor && lc(c.first_name) === vor) s += 2;
+    if (plz && c.zip === plz) s += 2;
+    if (ort && lc(c.city) === ort) s += 1;
+    if (mail && lc(c.email) === mail) s += 4;
+    if (tel.length >= 6 && [c.mobile, c.phone].some((t) => digits(t) === tel)) s += 4;
+    return { id: c.id, name: [...new Set([c.company, [c.first_name, c.last_name].filter(Boolean).join(' ')].filter(Boolean))].join(' – '), city: c.city || '', score: s };
+  }).filter((c) => c.score >= 3).sort((a, b) => b.score - a.score);
+  return scored.slice(0, 5);
+}
+const PROJ_TYPE_HINTS = ['Traktor', 'Kompakttraktor', 'Hoftrac', 'Radlader', 'Teleskopradlader', 'Teleskoplader', 'Mähdrescher', 'Presse', 'Aufsitzmäher', 'Mähroboter', 'Minibagger'];
+const PROJ_BRAND_HINTS = ['Weidemann', 'Massey Ferguson', 'Fendt', 'Kubota', 'TAFE', 'Kandi', 'Husqvarna', 'Stihl'];
+app.post('/api/projects/parse-offer', auth, express.raw({ type: () => true, limit: '25mb' }), wrap(async (req, res) => {
+  if (!req.body || !req.body.length) return bad(res, 'Leere Datei');
+  const mime = String(req.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
+  if (!OFFER_TYPES.includes(mime)) return bad(res, 'Bitte das Angebot als PDF oder Foto (JPG/PNG) hochladen');
+  const name = U.str(decodeURIComponent(req.get('X-Filename') || 'Angebot.pdf'), 200).replace(/[\\/\0]/g, '_');
+  try { cleanupOffers(); } catch { /* egal */ }
+  const token = `offer_${U.token(16)}`;
+  fs.writeFileSync(path.join(DATA_DIR, 'files', token), req.body);
+  const file = { token, name, mime, size: req.body.length };
+  // 1. Angebote aus der Warenwirtschaft (PDF mit Text) direkt auslesen – kostenlos und sofort
+  let x = null; let source = null; let error = null;
+  if (mime === 'application/pdf') {
+    try { x = offerText.parseText(await offerText.pdfText(req.body)); } catch { x = null; }
+    if (x && x.preis_netto != null && (x.marke || x.modell)) source = 'text'; else x = null;
+  }
+  // 2. sonst (Foto, fremdes Angebot) mit der KI, wenn eingerichtet
+  const key = aiKey();
+  if (!x && key) {
+    try {
+      const brands = [...new Set([...PROJ_BRAND_HINTS, ...all("SELECT DISTINCT brand FROM projects WHERE brand<>''").map((r) => r.brand)])];
+      x = await offer.parseOffer({ buffer: req.body, mime, apiKey: key, brands, types: PROJ_TYPE_HINTS, financing: PROJ_FIN.filter((f) => f !== 'Offen') });
+      source = 'ai';
+    } catch (e) {
+      if (!(e instanceof offer.OfferError)) throw e;
+      error = e.message;
+    }
+  }
+  if (!x) return res.json({ file, ai: !!key, error: error || (key ? null : 'not_recognized') });
+  const d = (v) => (U.isDate(v) ? v : null);
+  const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
+  const person = [x.vorname, x.nachname].filter(Boolean).join(' ');
+  const fields = {
+    kunde: [x.firma, person].filter(Boolean).join(' – '), ort: x.ort || '',
+    ansprech: x.ansprechpartner || (x.firma ? person : '') || '', telefon: x.telefon || '',
+    brand: x.marke || '', typ: x.maschinentyp || '', modell: x.modell || '', ausstattung: (x.ausstattung || '').slice(0, 500),
+    preis: n(x.preis_netto), angebot_vom: d(x.angebot_datum), liefer: d(x.liefertermin),
+    inzahlung: x.inzahlung || '', inz_wert: n(x.inzahlung_wert),
+    finanzierung: PROJ_FIN.includes(x.finanzierung) ? x.finanzierung : '',
+    notizen: [x.angebot_nr ? `Angebot Nr. ${x.angebot_nr}` : '', x.gueltig_bis && U.isDate(x.gueltig_bis) ? `gültig bis ${x.gueltig_bis.split('-').reverse().join('.')}` : '', x.hinweise || ''].filter(Boolean).join(' · ').slice(0, 1000),
+  };
+  const address = { company: x.firma || '', first_name: x.vorname || '', last_name: x.nachname || '', street: x.strasse || '', zip: x.plz || '', city: x.ort || '', email: x.email || '', phone: x.telefon || '' };
+  res.json({ file, source, fields, address, matches: matchCustomers(x) });
+}));
+app.get('/api/projects/:id/offer', auth, (req, res) => {
+  const p = get('SELECT offer_stored, offer_name, offer_mime FROM projects WHERE id=?', req.params.id);
+  if (!p || !p.offer_stored) return res.status(404).end();
+  const inline = OFFER_TYPES.includes(p.offer_mime) && req.query.download !== '1';
+  res.set('Content-Type', inline ? p.offer_mime : 'application/octet-stream');
+  res.set('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(p.offer_name || 'Angebot')}`);
+  res.set('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox");
+  res.sendFile(path.join(DATA_DIR, 'files', p.offer_stored));
 });
 
 // ---------- Verkäufe & Einkäufe (Deckungsbeitrag) ----------
@@ -690,7 +809,7 @@ function money(v) {
 }
 const SALE_COND = { neu: 'Neu', gebraucht: 'Gebraucht', vorfuehr: 'Vorführmaschine' };
 const SALE_SQL = `SELECT s.*, u.name user_name,
-  NULLIF(TRIM(COALESCE(c.company,'') || CASE WHEN c.company<>'' AND (c.first_name<>'' OR c.last_name<>'') THEN ' – ' ELSE '' END || TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,''))), '') customer_name,
+  ${CUST_LABEL_SQL} customer_name,
   c.city customer_city,
   (SELECT v.id FROM sales v WHERE v.purchase_id=s.id AND v.kind='verkauf' LIMIT 1) sold_by_sale
   FROM sales s LEFT JOIN users u ON u.id=s.user_id LEFT JOIN customers c ON c.id=s.customer_id`;

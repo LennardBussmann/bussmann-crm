@@ -369,6 +369,73 @@ const U = require('../lib/util');
     await assert.rejects(call('k', 'DELETE', `/api/projects/${pr3}`), /403/);
     await call('k', 'DELETE', `/api/projects/${pr2}`);
 
+    // Angebot hochladen und auswerten
+    const OT = require('../lib/offer-text');
+    const sample = [
+      '                                                                         Probeausdruck Angebot',
+      'Firma',
+      'Muster Agrar GbR                                                           ANGEBOT',
+      'Am Feldweg 7',
+      '48329 Havixbeck',
+      '                                                                           Nummer:            70001',
+      '                                                                           Kunden­Nr.:        99999',
+      '                                                                           Datum:             02.11.2026',
+      'Pos Artikel                                        Menge          E­Preis                 Endpreis M',
+      '1 WD1390                 Weidemann 1390            1,00          30.000,00               30.000,00 1',
+      '                         mit Komfortkabine',
+      '2    40001               Schaufel 1,0m             1,00           1.000,00                1,000,00 1',
+      '3    40002               Hydraulikbausatz mit      1,00             500,00',
+      '                         Steuergerät                                                      500,00 1',
+      '4                        Inzahlungnahme Weidemann 1140 Bj. 2012   1,00   -8.000,00     -8.000,00 1',
+      '5                        Überführungkosten         1,00             300,00                  300,00 1',
+      '                                                 Netto­Betrag      MwSt­Betrag     Brutto­Betrag',
+      '                                 19.00% MwSt. (1)  23.800,00        4.522,00          28.322,00',
+      '                                         Summe     23.800,00        4.522,00          28.322,00',
+      '                                                       Das Angebot ist gültig bis zum 30.11.26.',
+    ].join('\n');
+    const ox = OT.parseText(sample);
+    assert.equal(ox.firma, 'Muster Agrar GbR'); assert.equal(ox.plz, '48329'); assert.equal(ox.strasse, 'Am Feldweg 7');
+    assert.equal(ox.marke, 'Weidemann'); assert.equal(ox.modell, '1390'); assert.equal(ox.maschinentyp, 'Hoftrac');
+    assert.equal(ox.angebot_nr, '70001'); assert.equal(ox.angebot_datum, '2026-11-02'); assert.equal(ox.gueltig_bis, '2026-11-30');
+    assert.equal(ox.inzahlung_wert, 8000); assert.match(ox.inzahlung, /1140/);
+    assert.equal(ox.preis_netto, 31800); // ohne Abzug der Inzahlungnahme
+    assert.match(ox.ausstattung, /Hydraulikbausatz mit Steuergerät/); assert.doesNotMatch(ox.ausstattung, /Überführung/);
+    assert.equal(OT.parseText('Rechnung ohne alles'), null);
+    const upload = async (buf, type, name) => {
+      const r = await fetch(base + '/api/projects/parse-offer', { method: 'POST', headers: { 'X-Requested-With': 'crm', Cookie: jars.a, 'Content-Type': type, 'X-Filename': encodeURIComponent(name) }, body: buf });
+      const j = await r.json(); if (!r.ok) throw new Error(JSON.stringify(j)); return j;
+    };
+    // PDF ohne erkennbaren Text, ohne KI-Schlüssel: nur ablegen
+    const u0 = await upload(Buffer.from('%PDF-1.4 kaputt'), 'application/pdf', 'Angebot.pdf');
+    assert.ok(u0.file.token.startsWith('offer_')); assert.equal(u0.fields, undefined); assert.equal(u0.error, 'not_recognized');
+    await assert.rejects(upload(Buffer.from('x'), 'text/plain', 'a.txt'), /PDF oder Foto/);
+    // Foto mit KI (Auswertung im Test simuliert)
+    const OFF = require('../lib/offer');
+    const realParse = OFF.parseOffer;
+    OFF.parseOffer = async () => ({ ...ox, firma: null, vorname: 'Daniel', nachname: 'Dircks', plz: '48727', ort: 'Billerbeck', strasse: 'Aulendorfer Weg 13', finanzierung: 'Leasing', email: null, telefon: null, ansprechpartner: null });
+    await call('a', 'PUT', '/api/settings', { ai_key: 'sk-test' });
+    assert.equal((await call('a', 'GET', '/api/settings')).ai_key_set, true);
+    assert.equal((await call('a', 'GET', '/api/projects?meta=1')).ai, true);
+    const u1 = await upload(Buffer.from('fakejpg'), 'image/jpeg', 'foto.jpg');
+    assert.equal(u1.source, 'ai'); assert.equal(u1.fields.brand, 'Weidemann'); assert.equal(u1.fields.preis, 31800); assert.equal(u1.fields.finanzierung, 'Leasing');
+    assert.equal(u1.matches[0].id, id); // Daniel Dircks aus Billerbeck erkannt
+    assert.match(u1.fields.notizen, /Angebot Nr\. 70001/);
+    OFF.parseOffer = async () => { throw new OFF.OfferError('Der KI-Schlüssel ist ungültig'); };
+    const u2 = await upload(Buffer.from('fakejpg'), 'image/jpeg', 'foto2.jpg');
+    assert.match(u2.error, /ungültig/); assert.ok(u2.file.token);
+    OFF.parseOffer = realParse;
+    await call('a', 'PUT', '/api/settings', { ai_key_clear: true });
+    // Speichern hängt das Angebot ans Projekt und legt es beim Kunden ab
+    const filesBefore = (await call('a', 'GET', `/api/customers/${id}`)).files.length;
+    const { id: po } = await call('a', 'POST', '/api/projects', { customer_id: id, brand: 'Weidemann', modell: '1390', status: 'Angebot erstellt', offer_file: { token: u1.file.token, name: 'Angebot 70001.jpg', mime: 'image/jpeg' } });
+    const pod = await call('a', 'GET', `/api/projects/${po}`);
+    assert.equal(pod.offer_name, 'Angebot 70001.jpg');
+    assert.equal(await call('a', 'GET', `/api/projects/${po}/offer`), 'fakejpg');
+    assert.equal((await call('a', 'GET', `/api/customers/${id}`)).files.length, filesBefore + 1);
+    await call('a', 'POST', '/api/projects', { kunde: 'X', brand: 'Fendt', offer_file: { token: '../../etc/passwd', name: 'x' } }); // ungültig -> ignoriert
+    await call('a', 'DELETE', `/api/projects/${po}`);
+    assert.ok(!fs.existsSync(path.join(dir, 'files', u1.file.token)));
+
     // Abwesenheiten
     const d1 = U.addDays(U.today(), 20); const d3 = U.addDays(U.today(), 22);
     const absId = (await call('k', 'POST', '/api/absences', { kind: 'urlaub', start_date: d1, end_date: d3, note: 'Mallorca' })).id;
