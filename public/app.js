@@ -1796,6 +1796,8 @@ async function viewMap(main) {
   const map = Lf.map('bigmap', { preferCanvas: true }).setView(...HOME_VIEW);
   Lf.tileLayer(...OSM).addTo(map);
   const layer = Lf.layerGroup().addTo(map);
+  const tourLayer = Lf.layerGroup().addTo(map); // Tour-Stationen: nummerierte Markierung über dem Punkt
+  let drawMarks = null;
   let firstFit = true; let timer = null; let lastPoints = [];
   const addrOf = (p) => [p.street, [p.zip, p.city].filter(Boolean).join(' ')].filter(Boolean).join(', ');
   const sig = (list) => list.map((t) => t.id).join(',');
@@ -1864,6 +1866,7 @@ async function viewMap(main) {
   const drawTour = () => {
     try { sessionStorage.setItem('tour', JSON.stringify(tour)); sessionStorage.setItem('tourCur', JSON.stringify(cur)); } catch { /* egal */ }
     $('#tour-n').textContent = tour.length;
+    if (drawMarks) drawMarks();
     const dirty = cur && sig(tour) !== savedSig;
     $('#tour-title').innerHTML = cur ? `${esc(cur.name)}${dirty ? ' <span class="small muted">· geändert</span>' : ''}` : 'Tour';
     $('#tour-save').classList.toggle('primary-soft', !!dirty || (!cur && tour.length > 0));
@@ -1891,6 +1894,17 @@ async function viewMap(main) {
         : [['#c0292f', 'kaufender Kunde'], ['#4caf50', 'Interessent']];
     $('#mp-legend').innerHTML = items.map(([c, l]) => `<span><i style="background:${c}"></i>${esc(l)}</span>`).join('');
   };
+  drawMarks = () => {
+    tourLayer.clearLayers();
+    const byId = new Map(lastPoints.map((p) => [p.id, p]));
+    tour.forEach((t, i) => {
+      if (t.lat == null || t.lng == null) return;
+      const p = byId.get(t.id);
+      const col = p ? colorOf(p) : '#6a6d6e';
+      Lf.marker([t.lat, t.lng], { interactive: false, keyboard: false, zIndexOffset: 1000,
+        icon: Lf.divIcon({ className: 'tour-mark', iconSize: [26, 26], iconAnchor: [13, 13], html: `<span style="background:${esc(col)}">${i + 1}</span>` }) }).addTo(tourLayer);
+    });
+  };
   const load = async () => {
     try { sessionStorage.setItem('mapFilter', JSON.stringify(st)); } catch { /* egal */ }
     const qs = new URLSearchParams({ q: st.q, status: st.status, type: st.type, owner: st.owner, contact: st.contact, tag: st.tag, extra: st.extra });
@@ -1906,13 +1920,21 @@ async function viewMap(main) {
         ${p.mobile || p.phone ? `<div><a href="${telHref(p.mobile || p.phone)}">${esc(p.mobile || p.phone)}</a></div>` : ''}
         <div class="muted">Letzter Kontakt: ${p.last_contact ? deDate(p.last_contact) + ' ' + agoText(p.last_contact) : 'noch keiner'}${p.open_tasks ? ` · ${p.open_tasks} offene Aufgabe${p.open_tasks > 1 ? 'n' : ''}` : ''}</div>
         ${p.tags ? `<div style="margin-top:4px">${tagChips(p.tags, 'xs')}</div>` : ''}
-        <div class="mpop-acts"><a class="btn sm" href="#/kunden/${p.id}">Öffnen</a><button class="btn sm primary" data-tour="${p.id}">${tour.some((t) => t.id === p.id) ? 'In der Tour ✓' : '+ Zur Tour'}</button></div></div>`);
+        <div class="mpop-acts"><a class="btn sm" href="#/kunden/${p.id}">Öffnen</a><button class="btn sm primary" data-tour="${p.id}"></button></div></div>`);
       mk.on('popupopen', (e) => {
         const b = e.popup.getElement().querySelector('[data-tour]');
-        if (b) b.onclick = () => { if (!tour.some((t) => t.id === p.id)) { tour.push({ id: p.id, name: custName(p), addr: addrOf(p), lat: p.lat, lng: p.lng }); drawTour(); } b.textContent = 'In der Tour ✓'; };
+        if (!b) return;
+        const lbl = () => { const i = tour.findIndex((t) => t.id === p.id); b.textContent = i >= 0 ? `Station ${i + 1} · aus Tour entfernen` : '+ Zur Tour'; b.classList.toggle('primary', i < 0); };
+        lbl();
+        b.onclick = () => {
+          const i = tour.findIndex((t) => t.id === p.id);
+          if (i >= 0) tour.splice(i, 1); else tour.push({ id: p.id, name: custName(p), addr: addrOf(p), lat: p.lat, lng: p.lng });
+          drawTour(); lbl();
+        };
       });
       mk.addTo(layer);
     }
+    drawMarks();
     if (data.points.length && firstFit) { map.fitBounds(Lf.latLngBounds(data.points.map((p) => [p.lat, p.lng])), { padding: [30, 30], maxZoom: 13 }); firstFit = false; }
     $('#mp-info').innerHTML = `${data.points.length} von ${data.total} Kunden auf der Karte${data.pending ? ` · ${data.pending} werden gerade verortet …` : ''}${data.failed ? ` · <a href="#/kunden" id="mp-failed">${data.failed} Adressen nicht gefunden</a>` : ''}${data.noAddress ? ` · ${data.noAddress} ohne Adresse` : ''}`;
     const fl = $('#mp-failed');
