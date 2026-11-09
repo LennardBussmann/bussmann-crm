@@ -1763,6 +1763,8 @@ async function viewMap(main) {
   try { tour = JSON.parse(sessionStorage.getItem('tour') || '[]'); } catch { /* egal */ }
   let cur = null; // geladene, gespeicherte Tour {id, name}
   try { cur = JSON.parse(sessionStorage.getItem('tourCur') || 'null'); } catch { /* egal */ }
+  let tUser = Number(sessionStorage.getItem('tourUser')) || null; // zuerst Benutzer wählen
+  const canEdit = () => tUser && (state.me.role === 'admin' || tUser === state.me.id);
   let saved = [];
   let savedSig = ''; // Stationen der geladenen Tour, um Änderungen zu erkennen
   const meta = await loadMeta();
@@ -1782,7 +1784,8 @@ async function viewMap(main) {
     <div class="mapwrap">
       <div class="card mapcard"><div id="bigmap"></div><div class="map-legend" id="mp-legend"></div></div>
       <aside class="card tour"><div class="card-head"><h2>${icon('car')} <span id="tour-title">Tour</span></h2><span class="badge grey" id="tour-n">0</span></div>
-        <div class="tour-saved"><select id="tour-sel" title="Gespeicherte Touren"></select></div>
+        <div class="tour-saved"><label class="small muted">Benutzer</label><select id="tour-user"><option value="">– Benutzer wählen –</option>${state.users.filter((u) => u.active || u.id === state.me.id).map((u) => `<option value="${u.id}">${esc(u.name)}${u.id === state.me.id ? ' (ich)' : ''}</option>`).join('')}</select>
+          <label class="small muted" style="margin-top:6px">Touren</label><select id="tour-sel" title="Gespeicherte Touren"></select></div>
         <div id="tour-list"></div>
         <div class="tour-foot"><a class="btn primary sm" id="tour-go" target="_blank" rel="noopener">${icon('pin')} Route in Google Maps</a><button class="btn sm" id="tour-save">${icon('check')} Speichern</button><button class="btn sm" id="tour-more" title="Weitere Aktionen">…</button></div>
       </aside>
@@ -1798,10 +1801,20 @@ async function viewMap(main) {
   const sig = (list) => list.map((t) => t.id).join(',');
   const toStop = (c) => ({ id: c.id, name: custName(c), addr: addrOf(c), lat: c.lat, lng: c.lng });
   const drawSaved = () => {
+    $('#tour-user').value = tUser || '';
+    $('#tour-user').classList.toggle('ai-filled', !tUser);
+    $('#tour-sel').disabled = !tUser;
+    $('#tour-save').disabled = !canEdit(); $('#tour-more').disabled = !tUser;
+    if (!tUser) { $('#tour-sel').innerHTML = '<option value="">Erst oben den Benutzer wählen</option>'; return; }
     $('#tour-sel').innerHTML = `<option value="">${saved.length ? `Gespeicherte Touren (${saved.length}) …` : 'Noch keine gespeicherten Touren'}</option>`
       + saved.map((t) => `<option value="${t.id}" ${cur && cur.id === t.id ? 'selected' : ''}>${esc(t.name)} (${t.stops.length})</option>`).join('');
   };
-  const loadSaved = async () => { try { saved = await api('/tours'); } catch { saved = []; } if (cur && !saved.some((t) => t.id === cur.id)) cur = null; drawSaved(); };
+  const loadSaved = async () => { saved = []; if (tUser) { try { saved = await api('/tours?user=' + tUser); } catch { saved = []; } } if (cur && !saved.some((t) => t.id === cur.id)) { cur = null; savedSig = ''; } drawSaved(); };
+  $('#tour-user').onchange = async () => {
+    tUser = Number($('#tour-user').value) || null;
+    try { sessionStorage.setItem('tourUser', tUser || ''); } catch { /* egal */ }
+    await loadSaved(); drawTour();
+  };
   const askName = (title, val) => new Promise((resolve) => {
     let out = null;
     const m = modal({ title, body: `<form id="tn"><div class="field"><label>Name der Tour</label><input type="text" name="name" maxlength="100" value="${esc(val || '')}" placeholder="z. B. Dienstag Billerbeck / Darup" required></div></form>`,
@@ -1810,10 +1823,12 @@ async function viewMap(main) {
     $('#tn-ok', m.el).onclick = ok; $('#tn', m.el).onsubmit = (e) => { e.preventDefault(); ok(); };
   });
   const saveAs = async () => {
+    if (!tUser) { toast('Bitte zuerst den Benutzer wählen', true); $('#tour-user').focus(); return; }
+    if (!canEdit()) { toast('Touren für andere Benutzer kann nur ein Administrator speichern', true); return; }
     if (!tour.length) { toast('Erst Kunden zur Tour hinzufügen', true); return; }
     const name = await askName('Tour speichern', cur ? cur.name + ' (Kopie)' : '');
     if (!name) return;
-    try { const t = await api('/tours', { method: 'POST', body: { name, stops: tour.map((x) => x.id) } }); cur = { id: t.id, name: t.name }; savedSig = sig(tour); toast('Tour gespeichert'); await loadSaved(); drawTour(); } catch (e) { fail(e); }
+    try { const t = await api('/tours', { method: 'POST', body: { name, stops: tour.map((x) => x.id), user_id: tUser } }); cur = { id: t.id, name: t.name }; savedSig = sig(tour); toast('Tour gespeichert'); await loadSaved(); drawTour(); } catch (e) { fail(e); }
   };
   $('#tour-save').onclick = async () => {
     if (!cur) return saveAs();
@@ -1832,8 +1847,8 @@ async function viewMap(main) {
     e.stopPropagation();
     $('.tour-menu')?.remove();
     const menu = document.createElement('div'); menu.className = 'tour-menu card';
-    menu.innerHTML = `<button data-a="new">${icon('plus')} Neue Tour beginnen</button><button data-a="saveas">${icon('check')} Speichern unter …</button>`
-      + (cur ? `<button data-a="rename">${icon('edit')} „${esc(cur.name)}“ umbenennen</button><button data-a="del" class="danger">${icon('trash')} „${esc(cur.name)}“ löschen</button>` : '');
+    menu.innerHTML = `<button data-a="new">${icon('plus')} Neue Tour beginnen</button>` + (canEdit() ? `<button data-a="saveas">${icon('check')} Speichern unter …</button>` : '')
+      + (cur && canEdit() ? `<button data-a="rename">${icon('edit')} „${esc(cur.name)}“ umbenennen</button><button data-a="del" class="danger">${icon('trash')} „${esc(cur.name)}“ löschen</button>` : '');
     $('.tour').appendChild(menu);
     const off = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', off); } };
     setTimeout(() => document.addEventListener('click', off), 0);

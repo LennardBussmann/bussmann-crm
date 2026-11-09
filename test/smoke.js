@@ -380,6 +380,11 @@ const U = require('../lib/util');
     const t1b = await call('a', 'PUT', `/api/tours/${t1.id}`, { stops: [scust, id] });
     assert.equal(t1b.name, 'Dienstag Billerbeck'); assert.deepEqual(t1b.stops.map((c) => c.id), [scust, id]);
     await call('k', 'POST', '/api/tours', { name: 'Kais Tour', stops: [id] });
+    assert.equal((await call('a', 'GET', `/api/tours?user=${kollege.id}`)).length, 1); // Benutzer auswählen
+    await assert.rejects(call('k', 'POST', '/api/tours', { name: 'fremd', stops: [id], user_id: me.user.id }), /403/);
+    const tkai = await call('a', 'POST', '/api/tours', { name: 'Für Kai', stops: [id], user_id: kollege.id }); // Admin plant für Kollegen
+    assert.equal((await call('k', 'GET', '/api/tours')).length, 2);
+    await call('a', 'DELETE', `/api/tours/${tkai.id}`);
     assert.equal((await call('a', 'GET', '/api/tours')).length, 1);
     await call('a', 'DELETE', `/api/tours/${t1.id}`);
     assert.equal((await call('a', 'GET', '/api/tours')).length, 0);

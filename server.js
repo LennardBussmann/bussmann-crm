@@ -419,14 +419,20 @@ function cleanTour(b) {
   if (!ids.length) return { error: 'Die Tour hat noch keine Stationen' };
   return { name, stops: JSON.stringify(ids) };
 }
-const myTour = (req) => get('SELECT * FROM tours WHERE id=? AND user_id=?', req.params.id, req.user.id);
+/** Touren sehen alle; ändern darf der Benutzer selbst oder ein Administrator */
+const canTour = (req, userId) => req.user.role === 'admin' || Number(userId) === req.user.id;
+const myTour = (req) => { const t = get('SELECT * FROM tours WHERE id=?', req.params.id); return t && canTour(req, t.user_id) ? t : null; };
 app.get('/api/tours', auth, (req, res) => {
-  res.json(all('SELECT * FROM tours WHERE user_id=? ORDER BY lower(name)', req.user.id).map(tourOut));
+  const uid = Number(req.query.user) || req.user.id;
+  res.json(all('SELECT * FROM tours WHERE user_id=? ORDER BY lower(name)', uid).map(tourOut));
 });
 app.post('/api/tours', auth, (req, res) => {
   const t = cleanTour(req.body || {});
   if (t.error) return bad(res, t.error);
-  const id = Number(run('INSERT INTO tours(user_id, name, stops) VALUES(?,?,?)', req.user.id, t.name, t.stops).lastInsertRowid);
+  const uid = Number(req.body.user_id) || req.user.id;
+  if (!get('SELECT id FROM users WHERE id=?', uid)) return bad(res, 'Benutzer nicht gefunden');
+  if (!canTour(req, uid)) return res.status(403).json({ error: 'Touren für andere Benutzer kann nur ein Administrator anlegen' });
+  const id = Number(run('INSERT INTO tours(user_id, name, stops) VALUES(?,?,?)', uid, t.name, t.stops).lastInsertRowid);
   res.json(tourOut(get('SELECT * FROM tours WHERE id=?', id)));
 });
 app.put('/api/tours/:id', auth, (req, res) => {
