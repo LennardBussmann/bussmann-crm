@@ -1756,11 +1756,15 @@ function contactBucket(lc) {
   if (d >= mAgo(1)) return 'm1'; if (d >= mAgo(3)) return 'm3'; if (d >= mAgo(6)) return 'm6'; return 'old';
 }
 async function viewMap(main) {
-  let saved = {};
-  try { saved = JSON.parse(sessionStorage.getItem('mapFilter') || '{}'); } catch { /* egal */ }
-  const st = { q: '', status: '', type: '', owner: '', contact: '', tag: '', extra: '', color: 'status', ...saved };
+  let savedF = {};
+  try { savedF = JSON.parse(sessionStorage.getItem('mapFilter') || '{}'); } catch { /* egal */ }
+  const st = { q: '', status: '', type: '', owner: '', contact: '', tag: '', extra: '', color: 'status', ...savedF };
   let tour = [];
   try { tour = JSON.parse(sessionStorage.getItem('tour') || '[]'); } catch { /* egal */ }
+  let cur = null; // geladene, gespeicherte Tour {id, name}
+  try { cur = JSON.parse(sessionStorage.getItem('tourCur') || 'null'); } catch { /* egal */ }
+  let saved = [];
+  let savedSig = ''; // Stationen der geladenen Tour, um Änderungen zu erkennen
   const meta = await loadMeta();
   const others = state.users.filter((u) => u.active && u.id !== state.me.id);
   main.innerHTML = `
@@ -1777,9 +1781,10 @@ async function viewMap(main) {
     </div>
     <div class="mapwrap">
       <div class="card mapcard"><div id="bigmap"></div><div class="map-legend" id="mp-legend"></div></div>
-      <aside class="card tour"><div class="card-head"><h2>${icon('car')} Tour</h2><span class="badge grey" id="tour-n">0</span></div>
+      <aside class="card tour"><div class="card-head"><h2>${icon('car')} <span id="tour-title">Tour</span></h2><span class="badge grey" id="tour-n">0</span></div>
+        <div class="tour-saved"><select id="tour-sel" title="Gespeicherte Touren"></select></div>
         <div id="tour-list"></div>
-        <div class="tour-foot"><a class="btn primary sm" id="tour-go" target="_blank" rel="noopener">${icon('pin')} Route in Google Maps</a><button class="btn sm" id="tour-clear">Leeren</button></div>
+        <div class="tour-foot"><a class="btn primary sm" id="tour-go" target="_blank" rel="noopener">${icon('pin')} Route in Google Maps</a><button class="btn sm" id="tour-save">${icon('check')} Speichern</button><button class="btn sm" id="tour-more" title="Weitere Aktionen">…</button></div>
       </aside>
     </div>`;
   ['status', 'type', 'owner', 'contact', 'tag', 'extra', 'color'].forEach((k) => { $('#mp-' + k).value = st[k]; });
@@ -1790,9 +1795,63 @@ async function viewMap(main) {
   const layer = Lf.layerGroup().addTo(map);
   let firstFit = true; let timer = null; let lastPoints = [];
   const addrOf = (p) => [p.street, [p.zip, p.city].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  const sig = (list) => list.map((t) => t.id).join(',');
+  const toStop = (c) => ({ id: c.id, name: custName(c), addr: addrOf(c), lat: c.lat, lng: c.lng });
+  const drawSaved = () => {
+    $('#tour-sel').innerHTML = `<option value="">${saved.length ? `Gespeicherte Touren (${saved.length}) …` : 'Noch keine gespeicherten Touren'}</option>`
+      + saved.map((t) => `<option value="${t.id}" ${cur && cur.id === t.id ? 'selected' : ''}>${esc(t.name)} (${t.stops.length})</option>`).join('');
+  };
+  const loadSaved = async () => { try { saved = await api('/tours'); } catch { saved = []; } if (cur && !saved.some((t) => t.id === cur.id)) cur = null; drawSaved(); };
+  const askName = (title, val) => new Promise((resolve) => {
+    let out = null;
+    const m = modal({ title, body: `<form id="tn"><div class="field"><label>Name der Tour</label><input type="text" name="name" maxlength="100" value="${esc(val || '')}" placeholder="z. B. Dienstag Billerbeck / Darup" required></div></form>`,
+      foot: `<span class="left"></span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="tn-ok">Speichern</button>`, onClose: () => resolve(out) });
+    const ok = () => { const v = $('#tn', m.el).name.value.trim(); if (!v) return; out = v; m.close(); };
+    $('#tn-ok', m.el).onclick = ok; $('#tn', m.el).onsubmit = (e) => { e.preventDefault(); ok(); };
+  });
+  const saveAs = async () => {
+    if (!tour.length) { toast('Erst Kunden zur Tour hinzufügen', true); return; }
+    const name = await askName('Tour speichern', cur ? cur.name + ' (Kopie)' : '');
+    if (!name) return;
+    try { const t = await api('/tours', { method: 'POST', body: { name, stops: tour.map((x) => x.id) } }); cur = { id: t.id, name: t.name }; savedSig = sig(tour); toast('Tour gespeichert'); await loadSaved(); drawTour(); } catch (e) { fail(e); }
+  };
+  $('#tour-save').onclick = async () => {
+    if (!cur) return saveAs();
+    if (!tour.length) { toast('Die Tour ist leer', true); return; }
+    try { await api('/tours/' + cur.id, { method: 'PUT', body: { stops: tour.map((x) => x.id) } }); savedSig = sig(tour); toast(`„${cur.name}“ gespeichert`); await loadSaved(); drawTour(); } catch (e) { fail(e); }
+  };
+  $('#tour-sel').onchange = async () => {
+    const t = saved.find((x) => x.id === Number($('#tour-sel').value));
+    if (!t) return;
+    if (tour.length && sig(tour) !== savedSig && !(await confirmBox('Die aktuelle Tour ist nicht gespeichert. Trotzdem die andere Tour laden?', 'Laden'))) { drawSaved(); return; }
+    cur = { id: t.id, name: t.name }; tour = t.stops.map(toStop); savedSig = sig(tour); drawTour();
+    const pts = t.stops.filter((c) => c.lat != null);
+    if (pts.length) map.fitBounds(pts.map((c) => [c.lat, c.lng]), { padding: [40, 40], maxZoom: 13 });
+  };
+  $('#tour-more').onclick = (e) => {
+    e.stopPropagation();
+    $('.tour-menu')?.remove();
+    const menu = document.createElement('div'); menu.className = 'tour-menu card';
+    menu.innerHTML = `<button data-a="new">${icon('plus')} Neue Tour beginnen</button><button data-a="saveas">${icon('check')} Speichern unter …</button>`
+      + (cur ? `<button data-a="rename">${icon('edit')} „${esc(cur.name)}“ umbenennen</button><button data-a="del" class="danger">${icon('trash')} „${esc(cur.name)}“ löschen</button>` : '');
+    $('.tour').appendChild(menu);
+    const off = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', off); } };
+    setTimeout(() => document.addEventListener('click', off), 0);
+    menu.onclick = async (ev) => {
+      const a = ev.target.closest('[data-a]')?.dataset.a; if (!a) return;
+      menu.remove(); document.removeEventListener('click', off);
+      if (a === 'new') { if (tour.length && sig(tour) !== savedSig && !(await confirmBox('Die aktuelle Tour ist nicht gespeichert. Trotzdem neu beginnen?', 'Neu beginnen'))) return; tour = []; cur = null; savedSig = ''; drawSaved(); drawTour(); }
+      if (a === 'saveas') saveAs();
+      if (a === 'rename') { const n = await askName('Tour umbenennen', cur.name); if (!n) return; try { await api('/tours/' + cur.id, { method: 'PUT', body: { name: n } }); cur.name = n; await loadSaved(); drawTour(); } catch (err) { fail(err); } }
+      if (a === 'del') { if (!(await confirmBox(`Tour „${esc(cur.name)}“ löschen? Die Kunden bleiben natürlich erhalten.`))) return; try { await api('/tours/' + cur.id, { method: 'DELETE' }); toast('Tour gelöscht'); cur = null; savedSig = ''; await loadSaved(); drawTour(); } catch (err) { fail(err); } }
+    };
+  };
   const drawTour = () => {
-    try { sessionStorage.setItem('tour', JSON.stringify(tour)); } catch { /* egal */ }
+    try { sessionStorage.setItem('tour', JSON.stringify(tour)); sessionStorage.setItem('tourCur', JSON.stringify(cur)); } catch { /* egal */ }
     $('#tour-n').textContent = tour.length;
+    const dirty = cur && sig(tour) !== savedSig;
+    $('#tour-title').innerHTML = cur ? `${esc(cur.name)}${dirty ? ' <span class="small muted">· geändert</span>' : ''}` : 'Tour';
+    $('#tour-save').classList.toggle('primary-soft', !!dirty || (!cur && tour.length > 0));
     $('#tour-list').innerHTML = tour.length ? `<ol class="tourlist">${tour.map((t, i) => `<li><div><b>${esc(t.name)}</b><div class="small muted">${esc(t.addr)}</div></div>
       <span class="acts">${i ? `<button class="btn ghost icon sm" data-up="${i}" title="nach oben">${icon('left')}</button>` : ''}<button class="btn ghost icon sm" data-rm="${i}" title="entfernen">${icon('x')}</button></span></li>`).join('')}</ol>`
       : '<div class="empty small">Auf einen Punkt klicken und „Zur Tour“ wählen. Die Reihenfolge ist die Fahrreihenfolge.</div>';
@@ -1805,7 +1864,8 @@ async function viewMap(main) {
     $$('[data-rm]').forEach((b) => b.onclick = () => { tour.splice(Number(b.dataset.rm), 1); drawTour(); });
     $$('[data-up]').forEach((b) => b.onclick = () => { const i = Number(b.dataset.up); [tour[i - 1], tour[i]] = [tour[i], tour[i - 1]]; drawTour(); });
   };
-  $('#tour-clear').onclick = () => { tour = []; drawTour(); };
+  await loadSaved();
+  if (cur) { const t = saved.find((x) => x.id === cur.id); if (t) savedSig = sig(t.stops); }
   drawTour();
   const colorOf = (p) => (st.color === 'contact' ? CONTACT_COLORS[contactBucket(p.last_contact)]
     : st.color === 'type' ? (TYPE_COLORS[p.customer_type] || '#6a6d6e')

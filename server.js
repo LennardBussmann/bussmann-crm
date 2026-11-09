@@ -405,6 +405,45 @@ app.put('/api/customers/:id/geo', auth, (req, res) => {
   L.systemEntry(c.id, req.user.id, 'Position auf der Karte korrigiert');
   res.json({ ok: true });
 });
+// ---------- Gespeicherte Touren (je Benutzer) ----------
+function tourOut(t) {
+  let ids = [];
+  try { ids = JSON.parse(t.stops).map(Number).filter(Number.isInteger); } catch { /* leer */ }
+  const byId = new Map(ids.length ? all(`SELECT id, first_name, last_name, company, street, zip, city, lat, lng FROM customers WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).map((c) => [c.id, c]) : []);
+  return { id: t.id, name: t.name, updated_at: t.updated_at, stops: ids.map((i) => byId.get(i)).filter(Boolean) };
+}
+function cleanTour(b) {
+  const name = U.str(b.name, 100);
+  if (!name) return { error: 'Bitte einen Namen für die Tour eingeben' };
+  const ids = [...new Set((Array.isArray(b.stops) ? b.stops : []).map(Number).filter(Number.isInteger))].slice(0, 100);
+  if (!ids.length) return { error: 'Die Tour hat noch keine Stationen' };
+  return { name, stops: JSON.stringify(ids) };
+}
+const myTour = (req) => get('SELECT * FROM tours WHERE id=? AND user_id=?', req.params.id, req.user.id);
+app.get('/api/tours', auth, (req, res) => {
+  res.json(all('SELECT * FROM tours WHERE user_id=? ORDER BY lower(name)', req.user.id).map(tourOut));
+});
+app.post('/api/tours', auth, (req, res) => {
+  const t = cleanTour(req.body || {});
+  if (t.error) return bad(res, t.error);
+  const id = Number(run('INSERT INTO tours(user_id, name, stops) VALUES(?,?,?)', req.user.id, t.name, t.stops).lastInsertRowid);
+  res.json(tourOut(get('SELECT * FROM tours WHERE id=?', id)));
+});
+app.put('/api/tours/:id', auth, (req, res) => {
+  const old = myTour(req);
+  if (!old) return res.status(404).json({ error: 'Tour nicht gefunden' });
+  const t = cleanTour({ name: old.name, stops: JSON.parse(old.stops), ...req.body });
+  if (t.error) return bad(res, t.error);
+  run(`UPDATE tours SET name=?, stops=?, updated_at=datetime('now','localtime') WHERE id=?`, t.name, t.stops, old.id);
+  res.json(tourOut(get('SELECT * FROM tours WHERE id=?', old.id)));
+});
+app.delete('/api/tours/:id', auth, (req, res) => {
+  const old = myTour(req);
+  if (!old) return res.status(404).json({ error: 'Tour nicht gefunden' });
+  run('DELETE FROM tours WHERE id=?', old.id);
+  res.json({ ok: true });
+});
+
 app.get('/api/map', auth, (req, res) => {
   const { sql, params } = customerQuery({ ...req.query, userId: req.user.id });
   const rows = all(sql, ...params);

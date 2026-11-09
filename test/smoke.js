@@ -369,6 +369,21 @@ const U = require('../lib/util');
     await assert.rejects(call('k', 'DELETE', `/api/projects/${pr3}`), /403/);
     await call('k', 'DELETE', `/api/projects/${pr2}`);
 
+    // Gespeicherte Touren je Benutzer
+    const t1 = await call('a', 'POST', '/api/tours', { name: 'Dienstag Billerbeck', stops: [id, scust, id, 999999] });
+    assert.deepEqual(t1.stops.map((c) => c.id), [id, scust]); // doppelte entfernt, unbekannte ignoriert
+    await assert.rejects(call('a', 'POST', '/api/tours', { name: 'leer', stops: [] }), /Stationen/);
+    await assert.rejects(call('a', 'POST', '/api/tours', { name: '', stops: [id] }), /Namen/);
+    assert.equal((await call('k', 'GET', '/api/tours')).length, 0); // Kollege sieht fremde Touren nicht
+    await assert.rejects(call('k', 'PUT', `/api/tours/${t1.id}`, { name: 'x' }), /404/);
+    await assert.rejects(call('k', 'DELETE', `/api/tours/${t1.id}`), /404/);
+    const t1b = await call('a', 'PUT', `/api/tours/${t1.id}`, { stops: [scust, id] });
+    assert.equal(t1b.name, 'Dienstag Billerbeck'); assert.deepEqual(t1b.stops.map((c) => c.id), [scust, id]);
+    await call('k', 'POST', '/api/tours', { name: 'Kais Tour', stops: [id] });
+    assert.equal((await call('a', 'GET', '/api/tours')).length, 1);
+    await call('a', 'DELETE', `/api/tours/${t1.id}`);
+    assert.equal((await call('a', 'GET', '/api/tours')).length, 0);
+
     // Angebot hochladen und auswerten
     const OT = require('../lib/offer-text');
     const sample = [

@@ -402,7 +402,15 @@ button.chip.tagchip { border: 1px dashed var(--line-strong); cursor: pointer; fo
 .tourlist .acts { display: flex; flex: none; }
 .tourlist .acts .ico { transform: rotate(90deg); }
 .tourlist .acts [data-rm] .ico { transform: none; }
-.tour-foot { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--line); }
+.tour-foot { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.tour { position: relative; }
+.tour-saved { padding: 10px 12px 0; }
+.tour-saved select { width: 100%; }
+.tour-menu { position: absolute; right: 12px; bottom: 60px; z-index: 500; display: flex; flex-direction: column; padding: 6px; min-width: 230px; box-shadow: 0 8px 24px rgba(0,0,0,.15); }
+.tour-menu button { display: flex; gap: 8px; align-items: center; background: none; border: 0; padding: 9px 10px; text-align: left; border-radius: 6px; cursor: pointer; font: inherit; color: inherit; }
+.tour-menu button:hover { background: var(--surface-2); }
+.tour-menu button.danger { color: #c0292f; }
+.btn.primary-soft { border-color: #c0292f; color: #c0292f; }
 .btn.disabled { opacity: .45; pointer-events: none; }
 .mpop { font-family: var(--font); font-size: 13px; line-height: 1.45; min-width: 210px; }
 .mpop b { font-size: 14px; }
