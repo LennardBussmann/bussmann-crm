@@ -379,6 +379,11 @@ const U = require('../lib/util');
     await assert.rejects(call('k', 'DELETE', `/api/tours/${t1.id}`), /404/);
     const t1b = await call('a', 'PUT', `/api/tours/${t1.id}`, { stops: [scust, id] });
     assert.equal(t1b.name, 'Dienstag Billerbeck'); assert.deepEqual(t1b.stops.map((c) => c.id), [scust, id]);
+    const tm = (await call('a', 'POST', '/api/tours/match', { text: 'Nachname; Vorname\nDircks; Daniel\nDircks; ; Aulendorfer Weg 13\nGibtsNicht; Hans' })).rows;
+    assert.equal(tm.length, 3); // Kopfzeile übersprungen
+    assert.equal(tm[0].status, 'ok'); assert.equal(tm[0].pick, id);
+    assert.equal(tm[1].pick, id); assert.equal(tm[2].status, 'none'); assert.equal(tm[2].pick, null);
+    await assert.rejects(call('a', 'POST', '/api/tours/match', { text: ' ' }), /Liste/);
     await call('k', 'POST', '/api/tours', { name: 'Kais Tour', stops: [id] });
     assert.equal((await call('a', 'GET', `/api/tours?user=${kollege.id}`)).length, 1); // Benutzer auswählen
     await assert.rejects(call('k', 'POST', '/api/tours', { name: 'fremd', stops: [id], user_id: me.user.id }), /403/);

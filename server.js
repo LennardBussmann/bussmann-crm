@@ -415,13 +415,24 @@ function tourOut(t) {
 function cleanTour(b) {
   const name = U.str(b.name, 100);
   if (!name) return { error: 'Bitte einen Namen für die Tour eingeben' };
-  const ids = [...new Set((Array.isArray(b.stops) ? b.stops : []).map(Number).filter(Number.isInteger))].slice(0, 100);
+  const ids = [...new Set((Array.isArray(b.stops) ? b.stops : []).map(Number).filter(Number.isInteger))].slice(0, 300);
   if (!ids.length) return { error: 'Die Tour hat noch keine Stationen' };
   return { name, stops: JSON.stringify(ids) };
 }
 /** Touren sehen alle; ändern darf der Benutzer selbst oder ein Administrator */
 const canTour = (req, userId) => req.user.role === 'admin' || Number(userId) === req.user.id;
 const myTour = (req) => { const t = get('SELECT * FROM tours WHERE id=?', req.params.id); return t && canTour(req, t.user_id) ? t : null; };
+/** Namensliste (z. B. alte Kalendertour) mit den Kunden abgleichen */
+app.post('/api/tours/match', auth, (req, res) => {
+  const text = String((req.body || {}).text || '');
+  if (!text.trim()) return bad(res, 'Bitte die Liste einfügen');
+  const customers = all('SELECT id, first_name, last_name, company, street, zip, city, lat, lng FROM customers');
+  const byId = new Map(customers.map((c) => [c.id, c]));
+  const rows = require('./lib/tour-match').matchList(text, customers).map((r) => ({
+    ...r, candidates: r.candidates.map((k) => { const c = byId.get(k.id); return { id: c.id, score: k.score, first_name: c.first_name, last_name: c.last_name, company: c.company, street: c.street, zip: c.zip, city: c.city }; }),
+  }));
+  res.json({ rows });
+});
 app.get('/api/tours', auth, (req, res) => {
   const uid = Number(req.query.user) || req.user.id;
   res.json(all('SELECT * FROM tours WHERE user_id=? ORDER BY lower(name)', uid).map(tourOut));

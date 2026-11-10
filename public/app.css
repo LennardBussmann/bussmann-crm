@@ -406,6 +406,12 @@ button.chip.tagchip { border: 1px dashed var(--line-strong); cursor: pointer; fo
 .tour { position: relative; }
 .tour-saved { padding: 10px 12px 0; }
 .tour-mark { pointer-events: none; }
+.ti-tbl { width: 100%; }
+.ti-tbl td { vertical-align: middle; padding: 6px 8px; }
+.ti-tbl select { width: 100%; }
+.ti-tbl tr.ti-check td { background: #fff8e6; }
+.ti-tbl tr.ti-none td { background: #fbeeee; }
+#ti-text { width: 100%; font-family: inherit; }
 .tour-mark span { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; border: 3px solid #1f1f1f; box-shadow: 0 0 0 2px #fff, 0 2px 6px rgba(0,0,0,.35); color: #fff; font: 800 12px/1 'Nunito Sans', sans-serif; text-shadow: 0 1px 2px rgba(0,0,0,.5); box-sizing: border-box; }
 .tour-saved { display: flex; flex-direction: column; gap: 2px; }
 .tour-saved select { width: 100%; }

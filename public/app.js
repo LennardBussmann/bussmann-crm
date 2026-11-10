@@ -1755,6 +1755,61 @@ function contactBucket(lc) {
   const mAgo = (n) => { const x = parseISO(t); x.setMonth(x.getMonth() - n); return fmtISO(x); };
   if (d >= mAgo(1)) return 'm1'; if (d >= mAgo(3)) return 'm3'; if (d >= mAgo(6)) return 'm6'; return 'old';
 }
+/** Namensliste (z. B. Kalendertour vom Vorjahr) einfügen, mit den Kunden abgleichen und als Tour speichern */
+function openTourImport(userId, onSaved) {
+  const uName = state.users.find((u) => u.id === userId)?.name || '';
+  const md = modal({
+    title: 'Tour aus Liste importieren', wide: true,
+    body: `<div id="ti-step1">
+        <p class="small muted" style="margin-top:0">Eine Zeile pro Kunde, in Fahrreihenfolge: <b>Nachname; Vorname; Straße oder Ort</b>. Vorname und Straße sind freiwillig, helfen aber bei gleichen Nachnamen. Abkürzungen wie „Gr.“ und „Sch.“ werden erkannt.</p>
+        <textarea id="ti-text" rows="14" placeholder="Kreuzheck; Norbert&#10;Gr. Dahlmann&#10;Berning; Martin; Wenningweg 83&#10;Laubrock; ; Entrup 104"></textarea>
+      </div>
+      <div id="ti-step2" class="hidden"></div>`,
+    foot: `<span class="left" id="ti-left"></span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="ti-go">Mit Kunden abgleichen</button>`,
+  });
+  const cl = (c) => `${custName(c)}${c.company && custName(c) !== c.company ? ' (' + c.company + ')' : ''} · ${[c.street, [c.zip, c.city].filter(Boolean).join(' ')].filter(Boolean).join(', ') || 'ohne Adresse'}`;
+  let rows = []; const pickers = {};
+  const STATUS = { ok: '<span class="chip ok">gefunden</span>', check: '<span class="chip warn">bitte prüfen</span>', none: '<span class="chip">nicht gefunden</span>' };
+  const render = () => {
+    const n = { ok: 0, check: 0, none: 0 }; rows.forEach((r) => n[r.status]++);
+    $('#ti-step2', md.el).innerHTML = `
+      <div class="ti-sum"><span class="chip ok">${n.ok} gefunden</span> <span class="chip warn">${n.check} bitte prüfen</span> <span class="chip">${n.none} nicht gefunden</span></div>
+      <div class="table-wrap" style="max-height:55vh;overflow:auto;border:1px solid var(--line);border-radius:6px;margin-top:10px"><table class="list ti-tbl"><thead><tr><th>#</th><th>Aus der Liste</th><th>Kunde im CRM</th><th></th></tr></thead><tbody>
+      ${rows.map((r, i) => `<tr class="ti-${r.status}"><td>${i + 1}</td><td><b>${esc(r.line)}</b></td><td data-cell="${i}">${r.candidates.length ? `<select data-i="${i}">${r.candidates.map((c) => `<option value="${c.id}" ${c.id === r.pick ? 'selected' : ''}>${esc(cl(c))}</option>`).join('')}<option value="" ${r.pick ? '' : 'selected'}>– nicht übernehmen –</option><option value="search">Anderen Kunden suchen …</option></select>` : '<div data-picker></div>'}</td><td>${STATUS[r.status]}</td></tr>`).join('')}
+      </tbody></table></div>`;
+    $$('select[data-i]', md.el).forEach((s) => s.onchange = () => {
+      const i = Number(s.dataset.i);
+      if (s.value === 'search') { const cell = s.parentElement; cell.innerHTML = '<div data-picker></div>'; mkPicker(i, cell); return; }
+      rows[i].pick = Number(s.value) || null; count();
+    });
+    rows.forEach((r, i) => { if (!r.candidates.length) mkPicker(i, $(`[data-cell="${i}"]`, md.el)); });
+    count();
+  };
+  const mkPicker = (i, cell) => {
+    rows[i].pick = null;
+    pickers[i] = customerPicker($('[data-picker]', cell), null, (c) => { rows[i].pick = c ? c.id : null; count(); });
+    count();
+  };
+  const count = () => {
+    const k = rows.filter((r) => r.pick).length;
+    $('#ti-left', md.el).innerHTML = `<input type="text" id="ti-name" value="${esc($('#ti-name', md.el)?.value || `Kalendertour ${new Date().getFullYear()}`)}" style="width:220px" title="Name der Tour"> <span class="small muted">${k} von ${rows.length} Kunden${uName ? ' · für ' + esc(uName) : ''}</span>`;
+  };
+  $('#ti-go', md.el).onclick = async () => {
+    if (!rows.length) {
+      const text = $('#ti-text', md.el).value;
+      try { rows = (await api('/tours/match', { method: 'POST', body: { text } })).rows; } catch (e) { fail(e); return; }
+      $('#ti-step1', md.el).classList.add('hidden'); $('#ti-step2', md.el).classList.remove('hidden');
+      $('#ti-go', md.el).textContent = 'Als Tour speichern';
+      render(); return;
+    }
+    const stops = rows.map((r) => r.pick).filter(Boolean);
+    const name = $('#ti-name', md.el).value.trim();
+    if (!name) { toast('Bitte einen Namen für die Tour eingeben', true); return; }
+    if (!stops.length) { toast('Es ist noch kein Kunde ausgewählt', true); return; }
+    try { const t = await api('/tours', { method: 'POST', body: { name, stops, user_id: userId } }); md.close(); toast(`„${t.name}“ mit ${t.stops.length} Kunden gespeichert`); onSaved && onSaved(t); } catch (e) { fail(e); }
+  };
+}
+
 async function viewMap(main) {
   let savedF = {};
   try { savedF = JSON.parse(sessionStorage.getItem('mapFilter') || '{}'); } catch { /* egal */ }
@@ -1849,7 +1904,7 @@ async function viewMap(main) {
     e.stopPropagation();
     $('.tour-menu')?.remove();
     const menu = document.createElement('div'); menu.className = 'tour-menu card';
-    menu.innerHTML = `<button data-a="new">${icon('plus')} Neue Tour beginnen</button>` + (canEdit() ? `<button data-a="saveas">${icon('check')} Speichern unter …</button>` : '')
+    menu.innerHTML = `<button data-a="new">${icon('plus')} Neue Tour beginnen</button>` + (canEdit() ? `<button data-a="saveas">${icon('check')} Speichern unter …</button><button data-a="import">${icon('upload')} Tour aus Liste importieren …</button>` : '')
       + (cur && canEdit() ? `<button data-a="rename">${icon('edit')} „${esc(cur.name)}“ umbenennen</button><button data-a="del" class="danger">${icon('trash')} „${esc(cur.name)}“ löschen</button>` : '');
     $('.tour').appendChild(menu);
     const off = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', off); } };
@@ -1859,6 +1914,7 @@ async function viewMap(main) {
       menu.remove(); document.removeEventListener('click', off);
       if (a === 'new') { if (tour.length && sig(tour) !== savedSig && !(await confirmBox('Die aktuelle Tour ist nicht gespeichert. Trotzdem neu beginnen?', 'Neu beginnen'))) return; tour = []; cur = null; savedSig = ''; drawSaved(); drawTour(); }
       if (a === 'saveas') saveAs();
+      if (a === 'import') openTourImport(tUser, async (t) => { cur = { id: t.id, name: t.name }; tour = t.stops.map(toStop); savedSig = sig(tour); await loadSaved(); drawTour(); const pts = t.stops.filter((c) => c.lat != null); if (pts.length) map.fitBounds(pts.map((c) => [c.lat, c.lng]), { padding: [40, 40], maxZoom: 13 }); });
       if (a === 'rename') { const n = await askName('Tour umbenennen', cur.name); if (!n) return; try { await api('/tours/' + cur.id, { method: 'PUT', body: { name: n } }); cur.name = n; await loadSaved(); drawTour(); } catch (err) { fail(err); } }
       if (a === 'del') { if (!(await confirmBox(`Tour „${esc(cur.name)}“ löschen? Die Kunden bleiben natürlich erhalten.`))) return; try { await api('/tours/' + cur.id, { method: 'DELETE' }); toast('Tour gelöscht'); cur = null; savedSig = ''; await loadSaved(); drawTour(); } catch (err) { fail(err); } }
     };
