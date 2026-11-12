@@ -384,6 +384,17 @@ const U = require('../lib/util');
     assert.equal(tm[0].status, 'ok'); assert.equal(tm[0].pick, id);
     assert.equal(tm[1].pick, id); assert.equal(tm[2].status, 'none'); assert.equal(tm[2].pick, null);
     await assert.rejects(call('a', 'POST', '/api/tours/match', { text: ' ' }), /Liste/);
+    {
+      const XL = require('xlsx');
+      const wb = XL.utils.book_new();
+      XL.utils.book_append_sheet(wb, XL.utils.aoa_to_sheet([['Kalendertour 2026'], ['Nr', 'Vorname', 'Nachname', 'Straße', 'Ort'], [1, 'Daniel', 'Dircks', 'Aulendorfer Weg 13', 'Billerbeck'], [2, '', 'GibtsNicht', '', ''], [3, '', '', '', '']]), 'Tour');
+      const xr = await fetch(base + '/api/tours/excel', { method: 'POST', headers: { 'X-Requested-With': 'crm', Cookie: jars.a, 'Content-Type': 'application/octet-stream' }, body: XL.write(wb, { type: 'buffer', bookType: 'xlsx' }) }).then((r) => r.json());
+      assert.equal(xr.count, 2); assert.equal(xr.text.split('\n')[0], 'Dircks; Daniel; Aulendorfer Weg 13 Billerbeck');
+      const xm = (await call('a', 'POST', '/api/tours/match', { text: xr.text })).rows;
+      assert.equal(xm[0].status, 'ok'); assert.equal(xm[1].status, 'none');
+      const bad = await fetch(base + '/api/tours/excel', { method: 'POST', headers: { 'X-Requested-With': 'crm', Cookie: jars.a, 'Content-Type': 'application/octet-stream' }, body: Buffer.alloc(0) });
+      assert.equal(bad.status, 400);
+    }
     await call('k', 'POST', '/api/tours', { name: 'Kais Tour', stops: [id] });
     assert.equal((await call('a', 'GET', `/api/tours?user=${kollege.id}`)).length, 1); // Benutzer auswählen
     await assert.rejects(call('k', 'POST', '/api/tours', { name: 'fremd', stops: [id], user_id: me.user.id }), /403/);

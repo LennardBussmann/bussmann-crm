@@ -423,6 +423,37 @@ function cleanTour(b) {
 const canTour = (req, userId) => req.user.role === 'admin' || Number(userId) === req.user.id;
 const myTour = (req) => { const t = get('SELECT * FROM tours WHERE id=?', req.params.id); return t && canTour(req, t.user_id) ? t : null; };
 /** Namensliste (z. B. alte Kalendertour) mit den Kunden abgleichen */
+/** Excel-/CSV-Liste für den Tour-Import in Textzeilen „Nachname; Vorname; Straße Ort“ umwandeln */
+app.post('/api/tours/excel', auth, express.raw({ type: () => true, limit: '20mb' }), (req, res) => {
+  let rows;
+  try {
+    const wb = XLSX.read(req.body, { type: 'buffer', cellDates: false });
+    rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' });
+  } catch { return bad(res, 'Die Datei konnte nicht gelesen werden – bitte eine Excel- oder CSV-Datei wählen'); }
+  rows = rows.filter((r) => r.some((c) => String(c).trim()));
+  if (!rows.length) return bad(res, 'Die Datei ist leer');
+  const key = (v) => String(v || '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss').replace(/[^a-z]/g, '');
+  const find = (hdr, re) => hdr.findIndex((h) => re.test(key(h)));
+  // Kopfzeile in den ersten 5 Zeilen suchen
+  let col = null; let start = 0;
+  for (let i = 0; i < Math.min(5, rows.length) && !col; i++) {
+    const hdr = rows[i];
+    const last = find(hdr, /^(nachname|name|kunde|kundenname|familienname|firma|betrieb|name1)$/);
+    if (last < 0) continue;
+    col = { last, first: find(hdr, /^(vorname|name2)$/), street: find(hdr, /^(strasse|str|strassehausnr|strassenr|adresse|anschrift|hausanschrift)$/), city: find(hdr, /^(ort|wohnort|stadt|ortsteil|plzort)$/), company: find(hdr, /^(firma|betrieb|unternehmen)$/) };
+    if (col.company === last) col.company = -1;
+    start = i + 1;
+  }
+  if (!col) col = { last: 0, first: 1, street: 2, city: 3, company: -1 }; // ohne Kopfzeile: Nachname, Vorname, Straße, Ort
+  const cell = (r, i) => (i >= 0 ? String(r[i] ?? '').replace(/[;\t|]/g, ' ').replace(/\s+/g, ' ').trim() : '');
+  const lines = rows.slice(start).map((r) => {
+    const last = cell(r, col.last) || cell(r, col.company);
+    if (!last) return '';
+    return [last, cell(r, col.first), [cell(r, col.street), cell(r, col.city)].filter(Boolean).join(' ')].join('; ').replace(/(; )+$/, '');
+  }).filter(Boolean).slice(0, 300);
+  if (!lines.length) return bad(res, 'In der Datei wurden keine Namen gefunden');
+  res.json({ text: lines.join('\n'), count: lines.length });
+});
 app.post('/api/tours/match', auth, (req, res) => {
   const text = String((req.body || {}).text || '');
   if (!text.trim()) return bad(res, 'Bitte die Liste einfügen');

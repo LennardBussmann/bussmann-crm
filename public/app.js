@@ -2096,6 +2096,7 @@ function openTourImport(userId, onSaved) {
     title: 'Tour aus Liste importieren', wide: true,
     body: `<div id="ti-step1">
         <p class="small muted" style="margin-top:0">Eine Zeile pro Kunde, in Fahrreihenfolge: <b>Nachname; Vorname; Straße oder Ort</b>. Vorname und Straße sind freiwillig, helfen aber bei gleichen Nachnamen. Abkürzungen wie „Gr.“ und „Sch.“ werden erkannt.</p>
+        <div class="ti-excel"><label class="btn">${icon('file')} Excel-Datei hochladen<input type="file" id="ti-file" accept=".xlsx,.xls,.csv,.ods" hidden></label> <span class="small muted">Spalten wie „Nachname“, „Vorname“, „Straße“, „Ort“ werden erkannt (Reihenfolge der Zeilen = Fahrreihenfolge). Oder die Namen unten einfügen:</span></div>
         <textarea id="ti-text" rows="14" placeholder="Kreuzheck; Norbert&#10;Gr. Dahlmann&#10;Berning; Martin; Wenningweg 83&#10;Laubrock; ; Entrup 104"></textarea>
       </div>
       <div id="ti-step2" class="hidden"></div>`,
@@ -2127,6 +2128,15 @@ function openTourImport(userId, onSaved) {
   const count = () => {
     const k = rows.filter((r) => r.pick).length;
     $('#ti-left', md.el).innerHTML = `<input type="text" id="ti-name" value="${esc($('#ti-name', md.el)?.value || `Kalendertour ${new Date().getFullYear()}`)}" style="width:220px" title="Name der Tour"> <span class="small muted">${k} von ${rows.length} Kunden${uName ? ' · für ' + esc(uName) : ''}</span>`;
+  };
+  $('#ti-file', md.el).onchange = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    try {
+      const r = await api('/tours/excel', { method: 'POST', raw: true, body: file, headers: { 'Content-Type': 'application/octet-stream' } });
+      $('#ti-text', md.el).value = r.text;
+      toast(`${r.count} Zeilen aus „${file.name}“ übernommen`);
+      $('#ti-go', md.el).click();
+    } catch (err) { fail(err); } finally { e.target.value = ''; }
   };
   $('#ti-go', md.el).onclick = async () => {
     if (!rows.length) {

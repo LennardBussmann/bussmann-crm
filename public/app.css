@@ -542,3 +542,5 @@ tr.click { cursor: pointer; }
 
 .homepage-box { background: var(--surface-2); border-radius: 8px; padding: 10px 12px; }
 .homepage-box .check { margin-bottom: 4px; }
+
+.ti-excel { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
