@@ -1932,8 +1932,9 @@ async function openSearchForm(s, onSaved) {
 const MON_SHORT = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
 const mdText = (md) => `${Number(md.slice(3))}. ${MON_SHORT[Number(md.slice(0, 2)) - 1]}`;
 /** kleiner Jahresbalken: in welchen Monaten läuft die Aktion */
+const CAMP_ANCHORS = { easter: 'Ostern', mothersday: 'Muttertag', erntedank: 'Erntedank', advent: '1. Advent' };
 function campBar(c) {
-  const s = Number(c.start_md.slice(0, 2)); const e = Number(c.end_md.slice(0, 2));
+  const s = Number((c.bar_start || c.start_md).slice(0, 2)); const e = Number((c.bar_end || c.end_md).slice(0, 2));
   const on = (m) => (s <= e ? m >= s && m <= e : m >= s || m <= e);
   const now = new Date().getMonth() + 1;
   return `<div class="camp-bar">${MON_SHORT.map((n, i) => `<span class="${on(i + 1) ? 'on' : ''} ${now === i + 1 ? 'now' : ''}" title="${MONTHS[i]}">${n[0]}</span>`).join('')}</div>`;
@@ -1947,20 +1948,20 @@ async function viewCampaigns(main) {
   const load = async () => {
     const d = await api('/campaigns');
     $('#k-list').innerHTML = d.rows.length ? `<div class="camp-grid">${d.rows.map((c) => `<div class="card camp ${c.active ? '' : 'off'} ${c.running ? 'running' : ''}">
-        <div class="camp-head"><div><div class="camp-when">${c.active ? (c.running ? '<span class="chip ok">läuft gerade</span>' : `ab ${deDate(c.next_start)}`) : '<span class="chip">pausiert</span>'}</div><h3>${esc(c.name)}</h3></div>
+        <div class="camp-head"><div><div class="camp-when">${c.channel === 'social' ? '<span class="chip soc">Social Media</span> ' : ''}${c.active ? (c.running ? '<span class="chip ok">läuft gerade</span>' : `ab ${deDate(c.next_start)}`) : '<span class="chip">pausiert</span>'}</div><h3>${esc(c.name)}</h3></div>
           <button class="btn sm" data-edit="${c.id}">${icon('edit')}</button></div>
         ${campBar(c)}
-        <div class="small"><b>Zeitraum:</b> ${mdText(c.start_md)} – ${mdText(c.end_md)}</div>
+        <div class="small"><b>${c.channel === 'social' ? 'Posten' : 'Zeitraum'}:</b> ${c.anchor ? `${deDate(c.next_start)}${c.next_end !== c.next_start ? ' – ' + deDate(c.next_end) : ''} <span class="muted">(${CAMP_ANCHORS[c.anchor] || ''}, jedes Jahr neu berechnet)</span>` : `${mdText(c.start_md)}${c.end_md !== c.start_md ? ' – ' + mdText(c.end_md) : ''}`}</div>
         ${c.active ? `<div class="small"><b>Erinnerung:</b> ${deDate(c.task && c.task.status === 'open' ? c.task.due_date : c.remind)} an ${esc(c.user_name)} (${c.lead_days % 7 === 0 ? c.lead_days / 7 + (c.lead_days === 7 ? ' Woche' : ' Wochen') : c.lead_days + ' Tage'} vorher)${c.task && c.task.status === 'open' ? ` · <a href="#/aufgaben/${c.task.id}">Aufgabe öffnen</a>` : ''}</div>` : ''}
-        <div class="small"><b>Zielgruppe:</b> ${campWho(c).length ? campWho(c).map((x) => `<span class="chip">${esc(x)}</span>`).join(' ') : 'alle Kunden'}${c.only_buyers ? ' <span class="chip ok">nur kaufende Kunden</span>' : ''}</div>
+        ${c.channel === 'social' ? '' : `<div class="small"><b>Zielgruppe:</b> ${campWho(c).length ? campWho(c).map((x) => `<span class="chip">${esc(x)}</span>`).join(' ') : 'alle Kunden'}${c.only_buyers ? ' <span class="chip ok">nur kaufende Kunden</span>' : ''}</div>`}
         ${c.description ? `<div class="small muted camp-desc">${esc(c.description)}</div>` : ''}
-        <div class="camp-count"><b>${c.count}</b> Kunden · ${c.count_post} mit Adresse · ${c.count_email} mit E-Mail</div>
-        ${c.last_run ? `<div class="small muted">${icon('check')} Zuletzt verschickt am ${deDate(c.last_run.created_at.slice(0, 10))} an ${c.last_run.count} Kunden (${esc(c.last_run.user_name || '')})</div>` : ''}
-        <div class="camp-actions">
+        ${c.channel === 'social' ? '' : `<div class="camp-count"><b>${c.count}</b> Kunden · ${c.count_post} mit Adresse · ${c.count_email} mit E-Mail</div>`}
+        ${c.channel !== 'social' && c.last_run ? `<div class="small muted">${icon('check')} Zuletzt verschickt am ${deDate(c.last_run.created_at.slice(0, 10))} an ${c.last_run.count} Kunden (${esc(c.last_run.user_name || '')})</div>` : ''}
+        ${c.channel === 'social' ? '' : `<div class="camp-actions">
           <a class="btn sm" href="/api/campaigns/${c.id}/customers.xlsx?channel=post">${icon('file')} Adressliste (Post)</a>
           <a class="btn sm" href="/api/campaigns/${c.id}/customers.xlsx?channel=email">${icon('mail')} E-Mail-Liste</a>
           <button class="btn sm primary" data-sent="${c.id}">${icon('check')} Als verschickt vermerken</button>
-        </div></div>`).join('')}</div>`
+        </div>`}</div>`).join('')}</div>`
       : '<div class="empty">Noch keine Aktionen. Mit „Neue Aktion“ legst du z. B. „Winterdienst“ mit Zeitraum und Zielgruppe an.</div>';
     $$('[data-edit]').forEach((b) => b.onclick = () => openCampaignForm(d.rows.find((c) => c.id === Number(b.dataset.edit)), load));
     $$('[data-sent]').forEach((b) => b.onclick = () => {
@@ -1990,25 +1991,35 @@ async function openCampaignForm(c, onSaved) {
     title: isEdit ? 'Aktion bearbeiten' : 'Neue Aktion', wide: true,
     body: `<form id="kf"><div class="form-grid">
       <div class="field full"><label>Name <span class="req">*</span></label><input type="text" name="name" value="${esc(c.name || '')}" placeholder="z. B. Winterdienst"></div>
-      <div class="field"><label>Aktion läuft von</label>${mdSel('start', c.start_md)}</div>
-      <div class="field"><label>bis</label>${mdSel('end', c.end_md)}</div>
+      <div class="field"><label>Art</label><select name="channel"><option value="flyer">Flyer / Kunden-Info (mit Zielgruppe)</option><option value="social" ${c.channel === 'social' ? 'selected' : ''}>Social-Media-Post</option></select></div>
+      <div class="field"><label>Datum</label><select name="anchor"><option value="">Fester Zeitraum im Jahr</option>${Object.entries(CAMP_ANCHORS).map(([k, v]) => `<option value="${k}" ${c.anchor === k ? 'selected' : ''}>Hängt an ${v} (jedes Jahr neu)</option>`).join('')}</select></div>
+      <div class="field kf-fix"><label>Aktion läuft von</label>${mdSel('start', c.start_md)}</div>
+      <div class="field kf-fix"><label>bis</label>${mdSel('end', c.end_md)}</div>
+      <div class="field kf-easter"><label>Von <span class="muted">(Tage davor/danach, z. B. -2 = 2 Tage vorher)</span></label><input type="number" name="easter_from" min="-60" max="60" value="${c.easter_from ?? 0}"></div>
+      <div class="field kf-easter"><label>Bis <span class="muted">(0 = am Tag selbst)</span></label><input type="number" name="easter_to" min="-60" max="60" value="${c.easter_to ?? 0}"></div>
       <div class="field"><label>Erinnerung</label><select name="lead_days">${[[7, '1 Woche'], [14, '2 Wochen'], [21, '3 Wochen'], [28, '4 Wochen'], [35, '5 Wochen'], [42, '6 Wochen'], [56, '8 Wochen'], [84, '12 Wochen']].map(([v, l]) => `<option value="${v}" ${Number(c.lead_days) === v ? 'selected' : ''}>${l} vorher</option>`).join('')}</select></div>
       <div class="field"><label>Zuständig <span class="muted">(bekommt die Aufgabe)</span></label><select name="user_id">${userOptions(c.user_id || state.me.id)}</select></div>
       <div class="field full"><label>Ideen / Inhalt des Flyers</label><textarea name="description" rows="3" placeholder="z. B. Streuer und Schneeschilde anbieten, Winterdienst-Check">${esc(c.description || '')}</textarea></div>
-      <div class="sec full">Zielgruppe <span class="muted small" style="text-transform:none;letter-spacing:0">– Kunden, auf die mindestens eins zutrifft. Nichts angekreuzt = alle Kunden.</span></div>
-      <div class="field full"><label>Kundenart</label>${checks('types', TYPES, c.types)}</div>
-      <div class="field full"><label>Kunden mit Maschine</label>${checks('cats', cats, c.cats)}</div>
-      <div class="field full"><label>Schlagwörter</label>${checks('tags', tags, c.tags)}</div>
-      <div class="field full"><label class="check"><input type="checkbox" name="only_buyers" ${c.only_buyers ? 'checked' : ''}> Nur kaufende Kunden (keine Interessenten)</label>
+      <div class="sec full kf-target">Zielgruppe <span class="muted small" style="text-transform:none;letter-spacing:0">– Kunden, auf die mindestens eins zutrifft. Nichts angekreuzt = alle Kunden.</span></div>
+      <div class="field full kf-target"><label>Kundenart</label>${checks('types', TYPES, c.types)}</div>
+      <div class="field full kf-target"><label>Kunden mit Maschine</label>${checks('cats', cats, c.cats)}</div>
+      <div class="field full kf-target"><label>Schlagwörter</label>${checks('tags', tags, c.tags)}</div>
+      <div class="field full"><label class="check kf-target"><input type="checkbox" name="only_buyers" ${c.only_buyers ? 'checked' : ''}> Nur kaufende Kunden (keine Interessenten)</label>
         <label class="check"><input type="checkbox" name="active" ${c.active ? 'checked' : ''}> Aktion ist aktiv (jedes Jahr erinnern)</label></div>
     </div></form>`,
     foot: `<span class="left">${isEdit ? `<button class="btn danger" id="kf-del">${icon('trash')} Löschen</button>` : ''}</span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="kf-save">Speichern</button>`,
   });
   const f = $('#kf', md.el);
   const pad = (n) => String(n).padStart(2, '0');
+  const vis = () => {
+    $$('.kf-target', md.el).forEach((el) => { el.style.display = f.channel.value === 'social' ? 'none' : ''; });
+    $$('.kf-fix', md.el).forEach((el) => { el.style.display = f.anchor.value ? 'none' : ''; });
+    $$('.kf-easter', md.el).forEach((el) => { el.style.display = f.anchor.value ? '' : 'none'; });
+  };
+  f.channel.onchange = vis; f.anchor.onchange = vis; vis();
   $('#kf-save', md.el).onclick = async () => {
     const x = formData(f);
-    const body = { name: x.name, description: x.description, lead_days: Number(x.lead_days), user_id: Number(x.user_id), only_buyers: x.only_buyers, active: x.active,
+    const body = { channel: x.channel, anchor: x.anchor, easter_from: Number(x.easter_from), easter_to: Number(x.easter_to), name: x.name, description: x.description, lead_days: Number(x.lead_days), user_id: Number(x.user_id), only_buyers: x.only_buyers, active: x.active,
       start_md: `${pad(x.start_m)}-${pad(x.start_d)}`, end_md: `${pad(x.end_m)}-${pad(x.end_d)}` };
     for (const g of ['types', 'cats', 'tags']) body[g] = $$(`[data-g=${g}]:checked`, md.el).map((i) => i.value);
     try {

@@ -657,6 +657,21 @@ const U = require('../lib/util');
       await assert.rejects(call('a', 'POST', '/api/campaigns', { name: 'Ohne Datum' }), /Zeitraum/);
       await call('a', 'DELETE', `/api/campaigns/${k.id}`);
       await call('a', 'DELETE', `/api/customers/${cK}`);
+      // Social-Media-Grüße
+      kl = (await call('a', 'GET', '/api/campaigns')).rows;
+      const os = kl.find((c) => c.name.startsWith('Ostergrüße'));
+      assert.ok(os && os.channel === 'social' && os.anchor === 'easter' && os.active);
+      assert.equal(K.period(os, 2027).start, '2027-03-26'); // Karfreitag 2027
+      assert.ok(kl.some((c) => c.name.startsWith('Weihnachtsgrüße') && c.active));
+      const mt = kl.find((c) => c.name.startsWith('Muttertag'));
+      assert.ok(mt && !mt.active);
+      assert.equal(K.period(mt, 2027).end, '2027-05-09');
+      const ws = kl.find((c) => c.name.startsWith('Weihnachtsgrüße'));
+      const wt = await call('a', 'GET', `/api/tasks/${ws.task.id}`);
+      assert.match(wt.title, /Social-Media-Post vorbereiten/);
+      const sc = await call('a', 'POST', '/api/campaigns', { name: 'Test Advent', channel: 'social', anchor: 'advent', easter_from: 0, easter_to: 0, lead_days: 7 });
+      assert.equal(K.period((await call('a', 'GET', '/api/campaigns')).rows.find((c) => c.id === sc.id), 2026).start, '2026-11-29');
+      await call('a', 'DELETE', `/api/campaigns/${sc.id}`);
     }
 
     // iCal

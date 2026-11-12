@@ -564,3 +564,4 @@ tr.click { cursor: pointer; }
 .camp-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .chk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 2px 12px; }
 .camp .chip { white-space: normal; max-width: 100%; }
+.chip.soc { background: #e8f0fe; color: #1a56c4; }
