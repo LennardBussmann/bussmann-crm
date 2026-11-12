@@ -1430,6 +1430,7 @@ async function openProjectForm(p, onSaved) {
       <div class="field"><label>Liefertermin</label><input type="date" name="liefer" value="${esc(p.liefer || '')}"></div>
       <div class="field full"><label>Notizen</label><textarea name="notizen" rows="3">${esc(p.notizen || '')}</textarea></div>
       <div class="full" id="pf-won"></div>
+      ${isEdit ? `<input type="hidden" name="used_id" value="${p.used_id || ''}"><div class="full" id="pf-used"></div>` : ''}
     </div></form>`,
     foot: `<span class="left">${isEdit ? `<button class="btn danger" id="pf-del">${icon('trash')} Löschen</button>` : ''}</span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="pf-save">Speichern</button>`,
   });
@@ -1468,6 +1469,36 @@ async function openProjectForm(p, onSaved) {
     if (s1) s1.onclick = async () => { md.close(); openSaleForm(await api('/sales/' + p.sale_id), onSaved); };
   };
   f.status.onchange = upd; upd();
+  const drawUsed = () => {
+    const box = $('#pf-used', md.el); if (!box) return;
+    const u = p.used; const s = p.search; const closed = ['Gewonnen', 'Verloren'].includes(p.status);
+    const others = s ? s.matches.filter((m) => !u || m.id !== u.id) : [];
+    let h = '<div class="sec">Gebrauchtmaschine</div>';
+    if (u) h += `<div class="callout ok used-link">${thumb(u.photo_id)}<div class="grow"><b><a href="#/gebrauchte/${u.id}">${esc(u.title)}</a></b> <span class="muted small">Nr. G-${u.id}</span><div class="small">${esc(usedSpecs(u))}${u.asking_price != null ? ' · Wunschpreis <b>' + eur(u.asking_price) + '</b>' : ''}${u.purchase_price != null ? ' · EK ' + eur(u.purchase_price) : ''}</div>
+      <div class="small muted">${u.status === 'verkauft' ? 'Verkauft.' : 'Wird bei „Gewonnen“ automatisch als verkauft markiert, der EK kommt in den Verkauf.'}</div></div>${u.status !== 'verkauft' ? '<button type="button" class="btn sm" id="pf-unlink">Lösen</button>' : ''}</div>`;
+    if (s) {
+      h += `<div class="callout ${others.length ? 'ok' : 'info'}">${icon('search')} <b>Suchauftrag:</b> ${esc(s.title)}${s.max_price != null ? ' bis ' + eur(s.max_price) : ''} ${s.status === 'erledigt' ? '<span class="chip">erledigt</span>' : '<span class="chip">offen</span>'} <button type="button" class="btn sm" id="pf-sopen" style="margin-left:6px">Öffnen</button>`
+        + (others.length ? `<div class="small" style="margin-top:6px">${u ? 'Weitere passende Maschinen' : 'Passt aus dem Lager'}:</div>${others.map((m) => `<div class="match-row">${thumb(m.photo_id, 'thumb sm')}<div class="grow"><a href="#/gebrauchte/${m.id}">${esc(m.title)}</a> <span class="muted small">${esc(usedSpecs(m))}</span>${m.asking_price != null ? ' · <b>' + eur(m.asking_price) + '</b>' : ''}</div><button type="button" class="btn sm primary" data-take="${m.id}">Diese anbieten</button></div>`).join('')}`
+          : (s.status === 'offen' && !u ? '<div class="small" style="margin-top:4px">Im Moment passt nichts aus dem Lager – sobald etwas reinkommt, bekommt der Verkäufer eine Aufgabe.</div>' : ''))
+        + (s.status === 'offen' ? `<div class="small" style="margin-top:8px">Im Internet suchen: ${portalLinks(s)}</div>` : '') + '</div>';
+    } else if (!u && !closed) {
+      h += `<div class="callout info">${icon('info')} Sucht der Kunde eine Gebrauchte? <button type="button" class="btn sm primary" id="pf-snew" style="margin-left:6px">${icon('search')} Gebraucht suchen</button><div class="small muted" style="margin-top:4px">Legt einen Suchauftrag mit Maschinenart, Marke und Preis aus diesem Projekt an und zeigt passende Maschinen aus dem Lager.</div></div>`;
+    } else if (!u) h = '';
+    box.innerHTML = h;
+    const take = (m) => { f.used_id.value = m ? m.id : ''; p.used = m; if (m && !parseEur(f.preis.value) && m.asking_price != null) f.preis.value = eur2(m.asking_price); drawUsed(); if (m) toast('Verknüpft – zum Übernehmen „Speichern“'); };
+    const un = $('#pf-unlink', box); if (un) un.onclick = () => take(null);
+    $$('[data-take]', box).forEach((b) => b.onclick = () => take(s.matches.find((m) => m.id === Number(b.dataset.take))));
+    const so = $('#pf-sopen', box); if (so) so.onclick = async () => openSearchForm(await api('/searches/' + s.id), async () => { const x = await api('/projects/' + p.id); p.search = x.search; drawUsed(); });
+    const sn = $('#pf-snew', box);
+    if (sn) sn.onclick = async () => {
+      try {
+        p.search = await api(`/projects/${p.id}/search`, { method: 'POST', body: { category: f.typ.value, brand: f.brand.value, max_price: f.preis.value } });
+        drawUsed();
+        toast(p.search.matches.length ? `Suchauftrag angelegt – ${p.search.matches.length} passende Maschine${p.search.matches.length > 1 ? 'n' : ''} im Lager!` : 'Suchauftrag angelegt – du wirst informiert, sobald etwas Passendes reinkommt');
+      } catch (e) { fail(e); }
+    };
+  };
+  drawUsed();
 
   // ---- Angebot hochladen und auswerten ----
   let offerFile = null;
@@ -1571,6 +1602,20 @@ async function openProjectForm(p, onSaved) {
 const USED_STATUS = { verfuegbar: 'Verfügbar', reserviert: 'Reserviert', verkauft: 'Verkauft' };
 const standCls = (d) => (d == null ? '' : d > 180 ? 'neg' : d > 90 ? 'mid' : 'pos');
 const usedSpecs = (m) => [m.year ? 'Bj. ' + m.year : '', m.hours != null ? Number(m.hours).toLocaleString('de-DE') + ' h' : '', m.condition === 'vorfuehr' ? 'Vorführer' : ''].filter(Boolean).join(' · ');
+/** Such-Knöpfe für Online-Börsen (öffnen in neuem Tab, Suchbegriffe vorausgefüllt) */
+function portalLinks(s) {
+  const words = [s.brand, s.model, s.category].map((x) => String(x || '').trim()).filter(Boolean);
+  if (!words.length) return '<span class="muted small">Erst Maschinenart oder Marke eintragen.</span>';
+  const q = words.join(' ');
+  const max = parseEur(s.max_price);
+  const slug = encodeURIComponent(words.join('-').toLowerCase().replace(/\s+/g, '-'));
+  const g = (site) => 'https://www.google.de/search?q=' + encodeURIComponent(`${q} ${site ? 'site:' + site : 'gebraucht kaufen'}`);
+  const links = [
+    ['Kleinanzeigen', `https://www.kleinanzeigen.de/s-${max ? `preis::${Math.round(max)}/` : ''}${slug}/k0`],
+    ['traktorpool', g('traktorpool.de')], ['landwirt.com', g('landwirt.com')], ['technikboerse', g('technikboerse.com')], ['mobile.de', g('mobile.de')], ['Google', g('')],
+  ];
+  return links.map(([n, u]) => `<a class="btn sm web-btn" href="${esc(u)}" target="_blank" rel="noopener">${n} ↗</a>`).join(' ');
+}
 const thumb = (pid, cls = 'thumb') => (pid ? `<img class="${cls}" src="/api/used-photos/${pid}" alt="" loading="lazy">` : `<span class="${cls} empty-thumb">${icon('tractor')}</span>`);
 
 async function viewUsed(main, sub) {
@@ -1622,7 +1667,7 @@ async function viewUsed(main, sub) {
     }
     $('#u-list').innerHTML = rows.length ? `<table class="list"><thead><tr><th>Kunde</th><th>Sucht</th><th class="hide-m">Bedingungen</th><th class="hide-m">Verkäufer</th><th>Passende Maschinen</th></tr></thead><tbody>
       ${rows.map((r) => `<tr data-sid="${r.id}" class="click"><td><b>${esc(r.kunde_name || '')}</b><div class="muted small">${esc([r.kunde_ort, r.kunde_tel].filter(Boolean).join(' · '))}</div></td>
-        <td><b>${esc(r.title)}</b>${r.status === 'erledigt' ? ' <span class="chip">erledigt</span>' : ''}<div class="muted small">seit ${deDate(r.created_at)}</div></td>
+        <td><b>${esc(r.title)}</b>${r.status === 'erledigt' ? ' <span class="chip">erledigt</span>' : ''}<div class="muted small">seit ${deDate(r.created_at)}</div>${r.project_id ? `<div class="small"><span class="chip">${icon('target')} Projekt Nr. ${r.project_id}${r.project_status ? ' · ' + esc(r.project_status) : ''}</span></div>` : ''}</td>
         <td class="hide-m small">${[r.max_price != null ? 'bis ' + eur(r.max_price) : '', r.min_year ? 'ab Bj. ' + r.min_year : '', r.max_hours != null ? 'max. ' + Number(r.max_hours).toLocaleString('de-DE') + ' h' : ''].filter(Boolean).join(' · ') || '<span class="muted">–</span>'}${r.notes ? `<div class="muted">${esc(r.notes)}</div>` : ''}</td>
         <td class="hide-m">${esc(r.user_name || '')}</td>
         <td>${r.matches.length ? r.matches.map((m) => `<a href="#/gebrauchte/${m.id}" class="chip ok" onclick="event.stopPropagation()">${esc(m.title)}${m.asking_price != null ? ' · ' + eur(m.asking_price) : ''}</a>`).join(' ') : '<span class="muted small">noch keine</span>'}</td></tr>`).join('')}</tbody></table>`
@@ -1647,7 +1692,7 @@ async function openUsedForm(id, onSaved) {
     onClose: () => { if (changed && onSaved) onSaved(); },
     body: `<form id="uf"><div class="form-grid">
       ${isEdit ? `<div class="full"><div class="photo-strip" id="uf-photos"></div></div>` : ''}
-      ${isEdit && m.searches.length ? `<div class="full callout ok">${icon('user')} <b>Passt zu ${m.searches.length} Suchauftrag${m.searches.length > 1 ? 'en' : ''}:</b> ${m.searches.map((s) => `<div class="small" style="margin-top:4px">${s.customer_id ? `<a href="#/kunden/${s.customer_id}">${esc(s.kunde_name)}</a>` : esc(s.kunde_name)}${s.kunde_ort ? ', ' + esc(s.kunde_ort) : ''}${s.kunde_tel ? ` · <a href="${telHref(s.kunde_tel)}">${esc(s.kunde_tel)}</a>` : ''} – sucht ${esc(s.title)}${s.max_price != null ? ' bis ' + eur(s.max_price) : ''} <span class="muted">(${esc(s.user_name || '')})</span></div>`).join('')}</div>` : ''}
+      ${isEdit && m.searches.length ? `<div class="full callout ok">${icon('user')} <b>Passt zu ${m.searches.length} Suchauftrag${m.searches.length > 1 ? 'en' : ''}:</b> ${m.searches.map((s) => `<div class="small" style="margin-top:4px">${s.customer_id ? `<a href="#/kunden/${s.customer_id}">${esc(s.kunde_name)}</a>` : esc(s.kunde_name)}${s.kunde_ort ? ', ' + esc(s.kunde_ort) : ''}${s.kunde_tel ? ` · <a href="${telHref(s.kunde_tel)}">${esc(s.kunde_tel)}</a>` : ''} – sucht ${esc(s.title)}${s.max_price != null ? ' bis ' + eur(s.max_price) : ''} <span class="muted">(${esc(s.user_name || '')})</span> <button type="button" class="btn sm" data-sproj="${s.id}">${icon('target')} ${s.project_id ? 'Im Projekt Nr. ' + s.project_id + ' anbieten' : 'Verkaufsprojekt anlegen'}</button></div>`).join('')}</div>` : ''}
       <div class="sec full">Maschine</div>
       <div class="field"><label>Maschinenart</label><input type="text" name="category" list="uf-cats" value="${esc(m.category || '')}" placeholder="z. B. Hoftrac"><datalist id="uf-cats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></div>
       <div class="field"><label>Marke</label><input type="text" name="brand" list="uf-brands" value="${esc(m.brand || '')}"><datalist id="uf-brands">${[...new Set([...PROJ_BRANDS, ...meta.brands])].map((c) => `<option value="${esc(c)}">`).join('')}</datalist></div>
@@ -1711,6 +1756,13 @@ async function openUsedForm(id, onSaved) {
     if (!(await confirmBox(`${esc(m.title)} mit allen Fotos aus dem Lager löschen?`))) return;
     try { await api('/used/' + m.id, { method: 'DELETE' }); md.close(); toast('Gelöscht'); onSaved && onSaved(); } catch (e) { fail(e); }
   };
+  $$('[data-sproj]', md.el).forEach((b) => b.onclick = async () => {
+    try {
+      const r = await api(`/searches/${b.dataset.sproj}/project`, { method: 'POST', body: { used_id: m.id } });
+      md.close(); if (!r.existing) toast('Verkaufsprojekt angelegt – Wiedervorlage morgen steht im Kalender');
+      openProjectForm(await api('/projects/' + r.id), onSaved);
+    } catch (e) { fail(e); }
+  });
   const sb = $('#uf-sale', md.el); if (sb) sb.onclick = async () => { md.close(); openSaleForm(await api('/sales/' + m.sale_id), onSaved); };
   const sold = $('#uf-sold', md.el);
   if (sold) sold.onclick = async () => {
@@ -1743,6 +1795,7 @@ async function openSearchForm(s, onSaved) {
       <div class="field"><label>Status</label><select name="status"><option value="offen">Offen</option><option value="erledigt" ${s.status === 'erledigt' ? 'selected' : ''}>Erledigt</option></select></div>
       <div class="field full"><label>Notizen</label><textarea name="notes" rows="2" placeholder="z. B. braucht Kabine, Finanzierung gewünscht">${esc(s.notes || '')}</textarea></div>
       <div class="full" id="s2-matches"></div>
+      <div class="full" id="s2-web"></div>
     </div></form>`,
     foot: `<span class="left">${isEdit ? `<button class="btn danger" id="s2-del">${icon('trash')} Löschen</button>` : ''}</span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="s2-save">Speichern</button>`,
   });
@@ -1750,12 +1803,24 @@ async function openSearchForm(s, onSaved) {
   const free = () => $$('.s2-free', md.el).forEach((el) => { el.style.display = picker.get() ? 'none' : ''; });
   const picker = customerPicker($('#s2-cust', md.el), s.customer_id ? { id: s.customer_id, name: s.kunde_name || 'Kunde' } : null, free);
   free();
+  const projBtn = s.project_id ? 'Im Projekt anbieten' : 'Verkaufsprojekt anlegen';
   const showMatches = (list) => {
-    $('#s2-matches', md.el).innerHTML = list && list.length
-      ? `<div class="callout ok">${icon('check')} <b>Passt schon jetzt:</b> ${list.map((m) => `<div style="margin-top:6px"><a href="#/gebrauchte/${m.id}">${esc(m.title)}</a> <span class="muted small">${esc(usedSpecs(m))}</span> ${m.asking_price != null ? '· <b>' + eur(m.asking_price) + '</b>' : ''}</div>`).join('')}</div>`
-      : (isEdit ? '<div class="callout info small">Im Moment passt keine Maschine aus dem Lager. Sobald eine passende reinkommt, bekommt der Verkäufer eine Aufgabe.</div>' : '');
+    $('#s2-matches', md.el).innerHTML = (s.project_id ? `<div class="callout info" style="margin-bottom:8px">${icon('target')} Gehört zu <b>Verkaufsprojekt Nr. ${s.project_id}</b>${s.project_status ? ` <span class="pstat ${PROJ_STATUS_CLS[s.project_status] || ''}">${esc(s.project_status)}</span>` : ''} <button type="button" class="btn sm" data-proj="" style="margin-left:6px">Projekt öffnen</button></div>` : '')
+      + (list && list.length
+        ? `<div class="callout ok">${icon('check')} <b>Passt schon jetzt:</b> ${list.map((m) => `<div class="match-row">${thumb(m.photo_id, 'thumb sm')}<div class="grow"><a href="#/gebrauchte/${m.id}">${esc(m.title)}</a> <span class="muted small">${esc(usedSpecs(m))}</span> ${m.asking_price != null ? '· <b>' + eur(m.asking_price) + '</b>' : ''}</div>${isEdit ? `<button type="button" class="btn sm primary" data-proj="${m.id}">${icon('target')} ${projBtn}</button>` : ''}</div>`).join('')}</div>`
+        : (isEdit ? `<div class="callout info small">Im Moment passt keine Maschine aus dem Lager. Sobald eine passende reinkommt, bekommt der Verkäufer eine Aufgabe.${!s.project_id ? ` <button type="button" class="btn sm" data-proj="" style="margin-left:6px">${icon('target')} Trotzdem Verkaufsprojekt anlegen</button>` : ''}</div>` : ''));
+    $$('[data-proj]', md.el).forEach((b) => b.onclick = async () => {
+      try {
+        const r = await api(`/searches/${s.id}/project`, { method: 'POST', body: { used_id: b.dataset.proj ? Number(b.dataset.proj) : null } });
+        md.close(); onSaved && onSaved();
+        if (!s.project_id) toast('Verkaufsprojekt angelegt – Wiedervorlage morgen steht im Kalender');
+        openProjectForm(await api('/projects/' + r.id), onSaved);
+      } catch (e) { fail(e); }
+    });
   };
   showMatches(s.matches);
+  const web = () => { const x = { ...formData(f) }; $('#s2-web', md.el).innerHTML = x.category || x.brand || x.model ? `<div class="callout"><b>${icon('search')} Im Internet suchen</b> <span class="muted small">(öffnet die Börse mit den Suchbegriffen)</span><div style="margin-top:6px">${portalLinks(x)}</div></div>` : ''; };
+  web(); ['category', 'brand', 'model', 'max_price', 'min_year'].forEach((n) => f[n].addEventListener('input', web));
   $('#s2-save', md.el).onclick = async () => {
     const b = { ...formData(f), customer_id: picker.get() };
     try {

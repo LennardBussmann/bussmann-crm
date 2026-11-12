@@ -570,7 +570,7 @@ function projAmpel(p) {
   return p.faellig <= U.addDays(t, 7) ? 'gelb' : 'gruen';
 }
 const projCalc = (p) => ({ ...p, prob: PROJ_PROB[p.status] ?? 0, closed: PROJ_CLOSED.includes(p.status), ampel: projAmpel(p) });
-const PROJ_FIELDS = ['customer_id', 'kunde', 'ort', 'ansprech', 'telefon', 'brand', 'typ', 'modell', 'ausstattung', 'status', 'preis', 'angebot_vom', 'finanzierung', 'inzahlung', 'inz_wert', 'naechster', 'faellig', 'abschluss', 'liefer', 'user_id', 'notizen'];
+const PROJ_FIELDS = ['customer_id', 'kunde', 'ort', 'ansprech', 'telefon', 'brand', 'typ', 'modell', 'ausstattung', 'status', 'preis', 'angebot_vom', 'finanzierung', 'inzahlung', 'inz_wert', 'naechster', 'faellig', 'abschluss', 'liefer', 'user_id', 'notizen', 'used_id'];
 function cleanProject(b, user) {
   const d = (v) => (U.isDate(v) ? v : null);
   const p = {
@@ -583,6 +583,7 @@ function cleanProject(b, user) {
     naechster: U.str(b.naechster, 300) || '', faellig: d(b.faellig), abschluss: d(b.abschluss), liefer: d(b.liefer),
     user_id: b.user_id && get('SELECT id FROM users WHERE id=?', b.user_id) ? Number(b.user_id) : user.id,
     notizen: U.str(b.notizen, 5000) || '',
+    used_id: b.used_id && get('SELECT id FROM used_machines WHERE id=?', b.used_id) ? Number(b.used_id) : null,
   };
   if (Number.isNaN(p.preis) || Number.isNaN(p.inz_wert)) return { error: 'Bitte Beträge als Zahl eingeben' };
   if (!p.customer_id && !p.kunde) return { error: 'Bitte einen Kunden auswählen oder den Namen eintragen' };
@@ -612,12 +613,14 @@ function syncProjectSale(id, oldStatus, userId) {
   const linked = all('SELECT * FROM sales WHERE project_id=?', id);
   if (p.status === 'Gewonnen' && !linked.length) {
     const date = U.today();
-    const base = { date, user_id: p.user_id, customer_id: p.customer_id, party: p.customer_id ? '' : [p.kunde, p.ort].filter(Boolean).join(', '), condition: 'neu', category: p.typ || null, brand: p.brand || null, model: p.modell || null, serial: null, year: null, extra_costs: 0, purchase_id: null };
+    const um = p.used_id ? get(`SELECT * FROM used_machines WHERE id=? AND status<>'verkauft'`, p.used_id) : null; // Gebrauchte aus dem Lager
+    const base = { date, user_id: p.user_id, customer_id: p.customer_id, party: p.customer_id ? '' : [p.kunde, p.ort].filter(Boolean).join(', '), condition: um ? um.condition : 'neu', category: p.typ || (um && um.category) || null, brand: p.brand || null, model: p.modell || null, serial: um ? um.serial : null, year: um ? um.year : null, extra_costs: 0, purchase_id: null };
     const ins = (s) => Number(run(`INSERT INTO sales(${SALE_FIELDS.join(',')}, project_id, created_by) VALUES(${SALE_FIELDS.map(() => '?').join(',')}, ?, ?)`, ...SALE_FIELDS.map((f) => s[f] ?? null), id, userId).lastInsertRowid);
-    const sid = ins({ ...base, kind: 'verkauf', purchase_price: null, sale_price: p.preis ?? 0,
-      notes: [`Aus Verkaufsprojekt Nr. ${p.id}`, p.ausstattung ? `Ausstattung: ${p.ausstattung}` : '', p.finanzierung !== 'Offen' ? `Finanzierung: ${p.finanzierung}` : '', p.inzahlung ? `Inzahlungnahme: ${p.inzahlung}${p.inz_wert != null ? ' (' + p.inz_wert.toLocaleString('de-DE') + ' €)' : ''}` : ''].filter(Boolean).join('\n') });
+    const sid = ins({ ...base, kind: 'verkauf', purchase_price: um ? um.purchase_price : null, purchase_id: um ? um.purchase_id : null, sale_price: p.preis ?? 0,
+      notes: [`Aus Verkaufsprojekt Nr. ${p.id}`, um ? `Gebrauchtmaschine Nr. G-${um.id}` : '', p.ausstattung ? `Ausstattung: ${p.ausstattung}` : '', p.finanzierung !== 'Offen' ? `Finanzierung: ${p.finanzierung}` : '', p.inzahlung ? `Inzahlungnahme: ${p.inzahlung}${p.inz_wert != null ? ' (' + p.inz_wert.toLocaleString('de-DE') + ' €)' : ''}` : ''].filter(Boolean).join('\n') });
     const mid = machineFromSale({ ...base, kind: 'verkauf' }, userId);
     if (mid) run('UPDATE sales SET machine_id=? WHERE id=?', mid, sid);
+    if (um) run(`UPDATE used_machines SET status='verkauft', sold_date=?, sale_id=?, updated_at=datetime('now','localtime') WHERE id=?`, date, sid, um.id);
     if (p.inzahlung || p.inz_wert != null) {
       const eid = ins({ ...base, kind: 'einkauf', condition: 'gebraucht', category: null, brand: null, model: p.inzahlung || 'Inzahlungnahme', purchase_price: p.inz_wert ?? 0, sale_price: null, notes: `Inzahlungnahme aus Verkaufsprojekt Nr. ${p.id}` });
       usedFromPurchase(eid, userId);
@@ -626,8 +629,11 @@ function syncProjectSale(id, oldStatus, userId) {
     // Projekt doch nicht gewonnen: automatisch angelegte Einträge wieder entfernen (Maschine beim Kunden bleibt)
     run('UPDATE sales SET purchase_id=NULL WHERE purchase_id IN (SELECT id FROM sales WHERE project_id=?)', id);
     run(`DELETE FROM used_machines WHERE status='verfuegbar' AND purchase_id IN (SELECT id FROM sales WHERE project_id=?) AND NOT EXISTS (SELECT 1 FROM used_photos f WHERE f.used_id=used_machines.id)`, id);
+    run(`UPDATE used_machines SET status='verfuegbar', sold_date=NULL, sale_id=NULL WHERE sale_id IN (SELECT id FROM sales WHERE project_id=?)`, id);
     run('DELETE FROM sales WHERE project_id=?', id);
   }
+  // abgeschlossen (gewonnen/verloren) -> zugehörige Suchaufträge erledigt
+  if (['Gewonnen', 'Verloren'].includes(p.status) && oldStatus !== p.status) run(`UPDATE searches SET status='erledigt', updated_at=datetime('now','localtime') WHERE project_id=? AND status='offen'`, id);
 }
 function projectsQuery(q) {
   const where = []; const params = [];
@@ -705,7 +711,27 @@ ${rows.map((p) => `<tr class="${p.status === 'Gewonnen' ? 'won' : p.status === '
 app.get('/api/projects/:id', auth, (req, res) => {
   const p = get(`${PROJECT_SQL} WHERE p.id=?`, req.params.id);
   if (!p) return res.status(404).json({ error: 'Projekt nicht gefunden' });
-  res.json(projCalc(p));
+  const out = projCalc(p);
+  const stock = all(`${USED_SQL} WHERE m.status<>'verkauft' OR m.id=?`, p.used_id || 0).map(usedCalc);
+  const s = get(`${SEARCH_SQL} WHERE s.project_id=? ORDER BY s.status='offen' DESC, s.id DESC`, p.id);
+  out.search = s ? searchOut(s, stock.filter((m) => m.status !== 'verkauft')) : null;
+  out.used = p.used_id ? stock.find((m) => m.id === p.used_id) || null : null;
+  res.json(out);
+});
+/** Suchauftrag aus dem Projekt anlegen (Kunde, Marke, Typ und Budget übernehmen) */
+app.post('/api/projects/:id/search', auth, (req, res) => {
+  const p = get(`${PROJECT_SQL} WHERE p.id=?`, req.params.id);
+  if (!p) return res.status(404).json({ error: 'Projekt nicht gefunden' });
+  if (get(`SELECT 1 FROM searches WHERE project_id=? AND status='offen'`, p.id)) return bad(res, 'Für dieses Projekt gibt es schon einen offenen Suchauftrag');
+  const b = req.body || {};
+  const { s, error } = cleanSearch({ customer_id: p.customer_id, kunde: p.customer_id ? '' : [p.kunde, p.ort].filter(Boolean).join(', '), telefon: p.telefon, user_id: p.user_id,
+    category: b.category ?? p.typ, brand: b.brand ?? p.brand, model: b.model ?? '', max_price: b.max_price ?? p.preis, min_year: b.min_year, max_hours: b.max_hours, notes: b.notes ?? `Aus Verkaufsprojekt Nr. ${p.id}` }, req.user);
+  if (error) return bad(res, error);
+  const id = Number(run(`INSERT INTO searches(${SEARCH_FIELDS.join(',')}, project_id, created_by) VALUES(${SEARCH_FIELDS.map(() => '?').join(',')}, ?, ?)`, ...SEARCH_FIELDS.map((f) => s[f]), p.id, req.user.id).lastInsertRowid);
+  if (s.customer_id) L.systemEntry(s.customer_id, req.user.id, `Suchauftrag angelegt: ${searchTitle(s)} (Verkaufsprojekt Nr. ${p.id})`);
+  const out = searchOut(get(`${SEARCH_SQL} WHERE s.id=?`, id), all(`${USED_SQL} WHERE m.status<>'verkauft'`).map(usedCalc));
+  for (const m of out.matches) run('INSERT OR IGNORE INTO search_hits(search_id, used_id) VALUES(?,?)', id, m.id);
+  res.json(out);
 });
 app.post('/api/projects', auth, (req, res) => {
   const { p, error } = cleanProject(req.body || {}, req.user);
@@ -1128,7 +1154,7 @@ function searchMatches(s, m) {
   if (s.max_hours != null && m.hours != null && m.hours > s.max_hours) return false;
   return true;
 }
-const SEARCH_SQL = `SELECT s.*, u.name user_name, COALESCE(${CUST_LABEL_SQL}, s.kunde) kunde_name, c.city kunde_ort, COALESCE(NULLIF(c.mobile,''), NULLIF(c.phone,''), s.telefon) kunde_tel
+const SEARCH_SQL = `SELECT s.*, u.name user_name, (SELECT status FROM projects WHERE id=s.project_id) project_status, COALESCE(${CUST_LABEL_SQL}, s.kunde) kunde_name, c.city kunde_ort, COALESCE(NULLIF(c.mobile,''), NULLIF(c.phone,''), s.telefon) kunde_tel
   FROM searches s LEFT JOIN users u ON u.id=s.user_id LEFT JOIN customers c ON c.id=s.customer_id`;
 const searchTitle = (s) => [s.category, s.brand, s.model].filter(Boolean).join(' ') || 'Maschine';
 /** Neue/geänderte Maschine gegen alle offenen Suchaufträge prüfen und den Verkäufer informieren */
@@ -1175,7 +1201,7 @@ app.get('/api/used/:id', auth, (req, res) => {
   if (!m) return res.status(404).json({ error: 'Maschine nicht gefunden' });
   const r = usedCalc(m);
   r.photos = all('SELECT id FROM used_photos WHERE used_id=? ORDER BY sort, id', m.id).map((f) => f.id);
-  r.searches = all(`${SEARCH_SQL} WHERE s.status='offen'`).filter((s) => searchMatches(s, r)).map((s) => ({ id: s.id, kunde_name: s.kunde_name, kunde_ort: s.kunde_ort, kunde_tel: s.kunde_tel, customer_id: s.customer_id, title: searchTitle(s), max_price: s.max_price, user_name: s.user_name }));
+  r.searches = all(`${SEARCH_SQL} WHERE s.status='offen'`).filter((s) => searchMatches(s, r)).map((s) => ({ id: s.id, kunde_name: s.kunde_name, kunde_ort: s.kunde_ort, kunde_tel: s.kunde_tel, customer_id: s.customer_id, title: searchTitle(s), max_price: s.max_price, user_name: s.user_name, project_id: s.project_id, project_status: s.project_status }));
   res.json(r);
 });
 app.post('/api/used', auth, (req, res) => {
@@ -1322,6 +1348,32 @@ app.put('/api/searches/:id', auth, (req, res) => {
   const out = searchOut(get(`${SEARCH_SQL} WHERE s.id=?`, old.id), all(`${USED_SQL} WHERE m.status<>'verkauft'`).map(usedCalc));
   for (const m of out.matches) run('INSERT OR IGNORE INTO search_hits(search_id, used_id) VALUES(?,?)', old.id, m.id);
   res.json(out);
+});
+/** Aus Suchauftrag (und passender Gebrauchten) ein Verkaufsprojekt machen */
+app.post('/api/searches/:id/project', auth, (req, res) => {
+  const s = get(`${SEARCH_SQL} WHERE s.id=?`, req.params.id);
+  if (!s) return res.status(404).json({ error: 'Suchauftrag nicht gefunden' });
+  const m = req.body && req.body.used_id ? get('SELECT * FROM used_machines WHERE id=?', req.body.used_id) : null;
+  if (s.project_id && get('SELECT 1 FROM projects WHERE id=?', s.project_id)) {
+    if (m) run(`UPDATE projects SET used_id=?, updated_at=datetime('now','localtime') WHERE id=?`, m.id, s.project_id);
+    return res.json({ id: s.project_id, existing: true });
+  }
+  const { p, error } = cleanProject({
+    customer_id: s.customer_id, kunde: s.customer_id ? '' : s.kunde, telefon: s.kunde_tel || '', user_id: s.user_id || req.user.id,
+    brand: (m && m.brand) || s.brand || 'Gebraucht', typ: (m && m.category) || s.category, modell: (m && m.model) || s.model,
+    ausstattung: m ? [m.year ? 'Bj. ' + m.year : '', m.hours != null ? m.hours + ' h' : '', String(m.equipment || '').replace(/\n/g, ', ')].filter(Boolean).join(', ').slice(0, 500) : '',
+    status: 'Bedarf geklärt', preis: m ? m.asking_price : s.max_price, naechster: m ? 'Kunde über passende Gebrauchte informieren' : 'Passende Maschine anbieten', faellig: U.addDays(U.today(), 1),
+    notizen: [`Aus Suchauftrag: ${searchTitle(s)}`, s.notes].filter(Boolean).join('\n'), used_id: m ? m.id : null,
+  }, req.user);
+  if (error) return bad(res, error);
+  const id = tx(() => {
+    const id = Number(run(`INSERT INTO projects(${PROJ_FIELDS.join(',')}, created_by) VALUES(${PROJ_FIELDS.map(() => '?').join(',')}, ?)`, ...PROJ_FIELDS.map((f) => p[f]), req.user.id).lastInsertRowid);
+    run('UPDATE searches SET project_id=? WHERE id=?', id, s.id);
+    if (p.customer_id) L.systemEntry(p.customer_id, req.user.id, `Verkaufsprojekt angelegt: ${[p.brand, p.typ, p.modell].filter(Boolean).join(' ')} (aus Suchauftrag)`);
+    syncProjectTask(id);
+    return id;
+  });
+  res.json({ id });
 });
 app.delete('/api/searches/:id', auth, (req, res) => {
   const old = get('SELECT * FROM searches WHERE id=?', req.params.id);

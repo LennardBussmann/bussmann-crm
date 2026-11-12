@@ -525,3 +525,11 @@ tr.click { cursor: pointer; }
 .ph-add:hover { background: #fbeaea; }
 @media (max-width: 1100px) { .kpis.kpis-6 { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 860px) { .kpis.kpis-6 { grid-template-columns: repeat(2, 1fr); } .ph-item img, .ph-add { width: 120px; height: 90px; } }
+
+/* Kopplung Projekt <-> Gebrauchte / Suchauftrag */
+.used-link { display: flex; gap: 12px; align-items: center; }
+.used-link .grow, .match-row .grow { flex: 1; min-width: 0; }
+.match-row { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.thumb.sm { width: 48px; height: 36px; }
+.web-btn { margin: 2px 2px 2px 0; }
+#pf-used .callout + .callout { margin-top: 8px; }

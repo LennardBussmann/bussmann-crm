@@ -436,6 +436,28 @@ const U = require('../lib/util');
     assert.equal((await call('a', 'GET', `/api/used/${autoU.id}`)).status, 'verkauft'); // über den Einkauf erkannt
     await call('a', 'DELETE', `/api/sales/${vkU2.id}`);
     await assert.rejects(call('k', 'DELETE', `/api/used/${um2.id}`), /403/);
+    // Kopplung Suchauftrag <-> Verkaufsprojekt
+    const pj1 = await call('a', 'POST', '/api/projects', { customer_id: id, brand: 'Weidemann', typ: 'Hoftrac', status: 'Bedarf geklärt', preis: '30.000' });
+    const ps = await call('a', 'POST', `/api/projects/${pj1.id}/search`, {});
+    assert.equal(ps.project_id, pj1.id); assert.ok(ps.matches.some((m) => m.id === um1.id));
+    await assert.rejects(call('a', 'POST', `/api/projects/${pj1.id}/search`, {}), /offenen Suchauftrag/);
+    assert.equal((await call('a', 'GET', `/api/projects/${pj1.id}`)).search.id, ps.id);
+    const pj2 = await call('a', 'POST', `/api/searches/${sr1.id}/project`, { used_id: um1.id });
+    const pj2d = await call('a', 'GET', `/api/projects/${pj2.id}`);
+    assert.equal(pj2d.used.id, um1.id); assert.equal(pj2d.preis, 27500); assert.equal(pj2d.search.id, sr1.id);
+    assert.equal((await call('a', 'POST', `/api/searches/${sr1.id}/project`, {})).existing, true);
+    await call('a', 'PUT', `/api/projects/${pj2.id}`, { status: 'Gewonnen' });
+    const soldU = await call('a', 'GET', `/api/used/${um1.id}`);
+    assert.equal(soldU.status, 'verkauft');
+    const pSale = await call('a', 'GET', `/api/sales/${soldU.sale_id}`);
+    assert.equal(pSale.purchase_price, 18000); assert.equal(pSale.condition, 'gebraucht'); assert.equal(pSale.year, 2018);
+    assert.equal((await call('a', 'GET', `/api/searches/${sr1.id}`)).status, 'erledigt');
+    await call('a', 'PUT', `/api/projects/${pj2.id}`, { status: 'Verhandlung' });
+    assert.equal((await call('a', 'GET', `/api/used/${um1.id}`)).status, 'verfuegbar');
+    await call('a', 'PUT', `/api/projects/${pj1.id}`, { status: 'Verloren' });
+    assert.equal((await call('a', 'GET', `/api/searches/${ps.id}`)).status, 'erledigt');
+    await call('a', 'DELETE', `/api/projects/${pj1.id}`); await call('a', 'DELETE', `/api/projects/${pj2.id}`);
+    await call('a', 'DELETE', `/api/searches/${ps.id}`);
     await call('a', 'DELETE', `/api/used/${um1.id}`);
     assert.ok(!fs.existsSync(path.join(dir, 'files', `used${um1.id}_x`)));
     await call('a', 'PUT', `/api/searches/${sr1.id}`, { status: 'erledigt' });
