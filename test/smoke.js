@@ -394,6 +394,54 @@ const U = require('../lib/util');
     await call('a', 'DELETE', `/api/tours/${t1.id}`);
     assert.equal((await call('a', 'GET', '/api/tours')).length, 0);
 
+    // Gebrauchtmaschinen & Suchaufträge
+    const sr1 = await call('a', 'POST', '/api/searches', { customer_id: id, category: 'Hoftrac', brand: 'Weidemann', max_price: '30.000', min_year: 2015, user_id: kollege.id });
+    assert.equal(sr1.matches.length, 0);
+    await assert.rejects(call('a', 'POST', '/api/searches', { customer_id: id }), /gesucht/);
+    const srOther = await call('a', 'POST', '/api/searches', { kunde: 'Hof Test', category: 'Traktor' });
+    const nBefore = (await call('k', 'GET', '/api/notifications')).length;
+    const st0 = (await call('a', 'GET', '/api/used')).stats;
+    const um1 = await call('a', 'POST', '/api/used', { category: 'Hoftrac', brand: 'Weidemann', model: '1390', year: 2018, hours: '2.300', purchase_price: '18.000', asking_price: '26.900', in_date: U.addDays(U.today(), -200) });
+    assert.equal(um1.hits, 1); // passt zu sr1, nicht zu srOther
+    const nk = await call('k', 'GET', '/api/notifications');
+    assert.equal(nk.length, nBefore + 1); assert.match(nk[0].text, /Weidemann 1390/); assert.equal(nk[0].link, `#/gebrauchte/${um1.id}`);
+    assert.ok((await call('k', 'GET', `/api/tasks/${nk[0].task_id}`)).title.includes('Kunde informieren'));
+    assert.equal((await call('a', 'PUT', `/api/used/${um1.id}`, { asking_price: '27.500' })).hits, 0); // keine doppelte Meldung
+    const um2 = await call('a', 'POST', '/api/used', { category: 'Hoftrac', brand: 'Weidemann', model: '1140', year: 2010, asking_price: '12.000' });
+    assert.equal(um2.hits, 0); // Baujahr zu alt
+    const ul = await call('a', 'GET', '/api/used');
+    assert.equal(ul.stats.count, st0.count + 2); assert.equal(ul.stats.old, st0.old + 1); assert.equal(ul.stats.ek, st0.ek + 18000);
+    const u1row = ul.rows.find((r) => r.id === um1.id);
+    assert.equal(u1row.hours, 2300); assert.equal(u1row.margin, 9500); assert.ok(u1row.days >= 200); assert.equal(u1row.matches, 1);
+    assert.equal((await call('a', 'GET', `/api/searches/${sr1.id}`)).matches[0].id, um1.id);
+    // Fotos & Exposé
+    const ph = await fetch(base + `/api/used/${um1.id}/photos`, { method: 'POST', headers: { 'X-Requested-With': 'crm', Cookie: jars.a, 'Content-Type': 'image/jpeg' }, body: Buffer.from('jpgdata') }).then((r) => r.json());
+    assert.ok(ph.id);
+    assert.equal(await call('a', 'GET', `/api/used-photos/${ph.id}`), 'jpgdata');
+    const ex = await call('a', 'GET', `/api/used/${um1.id}/expose.html`);
+    assert.ok(ex.includes('Weidemann 1390') && ex.includes('27.500 €') && ex.includes(`/api/used-photos/${ph.id}`) && ex.includes('2.300'));
+    assert.ok(!(await call('a', 'GET', `/api/used/${um1.id}/expose.html?price=0`)).includes('27.500 €'));
+    // gebrauchter Einkauf -> automatisch im Lager; Verkauf -> verkauft; Verkauf gelöscht -> wieder verfügbar
+    const ekU = await call('a', 'POST', '/api/sales', { kind: 'einkauf', date: U.today(), condition: 'gebraucht', category: 'Traktor', brand: 'Fendt', model: '310', purchase_price: '25.000', party: 'Händler X' });
+    const autoU = (await call('a', 'GET', '/api/used')).rows.find((r) => r.purchase_id === ekU.id);
+    assert.ok(autoU); assert.equal(autoU.purchase_price, 25000);
+    assert.equal((await call('a', 'GET', `/api/searches/${srOther.id}`)).matches[0].id, autoU.id);
+    const vkU = await call('a', 'POST', '/api/sales', { kind: 'verkauf', date: U.today(), category: 'Hoftrac', brand: 'Weidemann', model: '1390', sale_price: '27.000', used_id: um1.id, add_machine: false });
+    const sold = await call('a', 'GET', `/api/used/${um1.id}`);
+    assert.equal(sold.status, 'verkauft'); assert.equal(sold.sale_id, vkU.id);
+    assert.equal((await call('a', 'GET', '/api/used')).stats.count, st0.count + 2);
+    await call('a', 'DELETE', `/api/sales/${vkU.id}`);
+    assert.equal((await call('a', 'GET', `/api/used/${um1.id}`)).status, 'verfuegbar');
+    const vkU2 = await call('a', 'POST', '/api/sales', { kind: 'verkauf', date: U.today(), brand: 'Fendt', model: '310', sale_price: '29.000', purchase_id: ekU.id, add_machine: false });
+    assert.equal((await call('a', 'GET', `/api/used/${autoU.id}`)).status, 'verkauft'); // über den Einkauf erkannt
+    await call('a', 'DELETE', `/api/sales/${vkU2.id}`);
+    await assert.rejects(call('k', 'DELETE', `/api/used/${um2.id}`), /403/);
+    await call('a', 'DELETE', `/api/used/${um1.id}`);
+    assert.ok(!fs.existsSync(path.join(dir, 'files', `used${um1.id}_x`)));
+    await call('a', 'PUT', `/api/searches/${sr1.id}`, { status: 'erledigt' });
+    assert.equal((await call('a', 'GET', '/api/searches')).length, 1);
+    await call('a', 'DELETE', `/api/searches/${srOther.id}`);
+
     // Angebot hochladen und auswerten
     const OT = require('../lib/offer-text');
     const sample = [

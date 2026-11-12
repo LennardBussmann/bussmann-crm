@@ -619,11 +619,13 @@ function syncProjectSale(id, oldStatus, userId) {
     const mid = machineFromSale({ ...base, kind: 'verkauf' }, userId);
     if (mid) run('UPDATE sales SET machine_id=? WHERE id=?', mid, sid);
     if (p.inzahlung || p.inz_wert != null) {
-      ins({ ...base, kind: 'einkauf', condition: 'gebraucht', category: null, brand: null, model: p.inzahlung || 'Inzahlungnahme', purchase_price: p.inz_wert ?? 0, sale_price: null, notes: `Inzahlungnahme aus Verkaufsprojekt Nr. ${p.id}` });
+      const eid = ins({ ...base, kind: 'einkauf', condition: 'gebraucht', category: null, brand: null, model: p.inzahlung || 'Inzahlungnahme', purchase_price: p.inz_wert ?? 0, sale_price: null, notes: `Inzahlungnahme aus Verkaufsprojekt Nr. ${p.id}` });
+      usedFromPurchase(eid, userId);
     }
   } else if (oldStatus === 'Gewonnen' && p.status !== 'Gewonnen' && linked.length) {
     // Projekt doch nicht gewonnen: automatisch angelegte Einträge wieder entfernen (Maschine beim Kunden bleibt)
     run('UPDATE sales SET purchase_id=NULL WHERE purchase_id IN (SELECT id FROM sales WHERE project_id=?)', id);
+    run(`DELETE FROM used_machines WHERE status='verfuegbar' AND purchase_id IN (SELECT id FROM sales WHERE project_id=?) AND NOT EXISTS (SELECT 1 FROM used_photos f WHERE f.used_id=used_machines.id)`, id);
     run('DELETE FROM sales WHERE project_id=?', id);
   }
 }
@@ -1043,6 +1045,11 @@ app.post('/api/sales', auth, (req, res) => {
     const r = run(`INSERT INTO sales(${SALE_FIELDS.join(',')}, created_by) VALUES(${SALE_FIELDS.map(() => '?').join(',')}, ?)`, ...SALE_FIELDS.map((f) => s[f]), req.user.id);
     const id = Number(r.lastInsertRowid);
     if (req.body.add_machine !== false) { const mid = machineFromSale(s, req.user.id); if (mid) run('UPDATE sales SET machine_id=? WHERE id=?', mid, id); }
+    if (s.kind === 'einkauf' && s.condition !== 'neu' && req.body.to_stock !== false) usedFromPurchase(id, req.user.id);
+    if (s.kind === 'verkauf') {
+      const u = req.body.used_id ? get('SELECT * FROM used_machines WHERE id=?', req.body.used_id) : s.purchase_id ? get('SELECT * FROM used_machines WHERE purchase_id=?', s.purchase_id) : null;
+      if (u && u.status !== 'verkauft') run(`UPDATE used_machines SET status='verkauft', sold_date=?, sale_id=?, updated_at=datetime('now','localtime') WHERE id=?`, s.date, id, u.id);
+    }
     return id;
   });
   res.json({ id });
@@ -1063,7 +1070,263 @@ app.put('/api/sales/:id', auth, (req, res) => {
 app.delete('/api/sales/:id', auth, (req, res) => {
   const old = get('SELECT * FROM sales WHERE id=?', req.params.id);
   if (!old || !canSale(req.user, old)) return res.status(404).json({ error: 'Nicht gefunden' });
+  run(`UPDATE used_machines SET status='verfuegbar', sold_date=NULL, sale_id=NULL WHERE sale_id=?`, old.id); // Verkauf gelöscht -> wieder im Lager
   run('DELETE FROM sales WHERE id=?', old.id); // Maschine beim Kunden bleibt bestehen
+  res.json({ ok: true });
+});
+
+// ---------- Gebrauchtmaschinen-Lager & Suchaufträge ----------
+const USED_STATUS = { verfuegbar: 'Verfügbar', reserviert: 'Reserviert', verkauft: 'Verkauft' };
+const USED_FIELDS = ['category', 'brand', 'model', 'serial', 'year', 'hours', 'condition', 'equipment', 'description', 'purchase_price', 'asking_price', 'location', 'status', 'in_date', 'origin', 'customer_id', 'user_id', 'notes'];
+const USED_SQL = `SELECT m.*, u.name user_name, ${CUST_LABEL_SQL} customer_name,
+  (SELECT id FROM used_photos f WHERE f.used_id=m.id ORDER BY sort, id LIMIT 1) photo_id,
+  (SELECT COUNT(*) FROM used_photos f WHERE f.used_id=m.id) photo_count
+  FROM used_machines m LEFT JOIN users u ON u.id=m.user_id LEFT JOIN customers c ON c.id=m.customer_id`;
+const usedCalc = (m) => {
+  const end = m.status === 'verkauft' && m.sold_date ? m.sold_date : U.today();
+  const days = m.in_date ? Math.max(0, Math.round((new Date(end) - new Date(m.in_date)) / 864e5)) : null;
+  const margin = m.asking_price != null && m.purchase_price != null ? Math.round((m.asking_price - m.purchase_price) * 100) / 100 : null;
+  return { ...m, days, margin, title: [m.brand, m.model].filter(Boolean).join(' ') || m.category || 'Maschine' };
+};
+const intOrNull = (v, lo, hi) => { const n = Number(String(v ?? '').replace(/\./g, '')); return v !== '' && v != null && Number.isInteger(n) && n >= lo && n <= hi ? n : null; };
+function cleanUsed(b, user) {
+  const m = {
+    category: U.str(b.category, 60) || null, brand: U.str(b.brand, 60) || null, model: U.str(b.model, 100) || null, serial: U.str(b.serial, 100) || null,
+    year: intOrNull(b.year, 1900, 2200), hours: intOrNull(b.hours, 0, 1000000),
+    condition: b.condition === 'vorfuehr' ? 'vorfuehr' : 'gebraucht',
+    equipment: U.str(b.equipment, 3000) || '', description: U.str(b.description, 5000) || '',
+    purchase_price: money(b.purchase_price), asking_price: money(b.asking_price), location: U.str(b.location, 100) || '',
+    status: USED_STATUS[b.status] ? b.status : 'verfuegbar',
+    in_date: U.isDate(b.in_date) ? b.in_date : U.today(), origin: U.str(b.origin, 300) || '',
+    customer_id: b.customer_id && get('SELECT id FROM customers WHERE id=?', b.customer_id) ? Number(b.customer_id) : null,
+    user_id: b.user_id && get('SELECT id FROM users WHERE id=?', b.user_id) ? Number(b.user_id) : user.id,
+    notes: U.str(b.notes, 5000) || '',
+  };
+  if (Number.isNaN(m.purchase_price) || Number.isNaN(m.asking_price)) return { error: 'Bitte Preise als Zahl eingeben' };
+  if (!m.category && !m.brand && !m.model) return { error: 'Bitte mindestens Art, Marke oder Modell angeben' };
+  return { m };
+}
+/** Gebrauchter Einkauf (z. B. Inzahlungnahme) kommt automatisch ins Gebrauchtmaschinen-Lager */
+function usedFromPurchase(saleId, userId) {
+  const s = get('SELECT * FROM sales WHERE id=?', saleId);
+  if (!s || s.kind !== 'einkauf' || get('SELECT 1 FROM used_machines WHERE purchase_id=?', s.id)) return null;
+  const origin = s.customer_id ? 'Inzahlungnahme / Ankauf' : (s.party ? 'Ankauf von ' + s.party : 'Ankauf');
+  const id = Number(run(`INSERT INTO used_machines(category, brand, model, serial, year, condition, purchase_price, in_date, origin, customer_id, purchase_id, user_id, notes, created_by)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, s.category, s.brand, s.model, s.serial, s.year, s.condition === 'vorfuehr' ? 'vorfuehr' : 'gebraucht', s.purchase_price, s.date, origin, s.customer_id, s.id, s.user_id, s.notes || '', userId).lastInsertRowid);
+  checkUsedHits(id, userId);
+  return id;
+}
+const nrm = (s) => String(s ?? '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss').replace(/[^a-z0-9]+/g, ' ').trim();
+/** passt die Maschine zum Suchauftrag? Unbekannte Werte (z. B. Baujahr fehlt) schließen nicht aus. */
+function searchMatches(s, m) {
+  if (m.status === 'verkauft' || s.status !== 'offen') return false;
+  if (s.brand && nrm(s.brand) !== nrm(m.brand)) return false;
+  if (s.category) { const a = nrm(s.category); const b = nrm(m.category); if (!b || !(a.includes(b) || b.includes(a))) return false; }
+  if (s.model && !nrm(`${m.model} ${m.brand}`).includes(nrm(s.model))) return false;
+  if (s.max_price != null && m.asking_price != null && m.asking_price > s.max_price) return false;
+  if (s.min_year != null && m.year != null && m.year < s.min_year) return false;
+  if (s.max_hours != null && m.hours != null && m.hours > s.max_hours) return false;
+  return true;
+}
+const SEARCH_SQL = `SELECT s.*, u.name user_name, COALESCE(${CUST_LABEL_SQL}, s.kunde) kunde_name, c.city kunde_ort, COALESCE(NULLIF(c.mobile,''), NULLIF(c.phone,''), s.telefon) kunde_tel
+  FROM searches s LEFT JOIN users u ON u.id=s.user_id LEFT JOIN customers c ON c.id=s.customer_id`;
+const searchTitle = (s) => [s.category, s.brand, s.model].filter(Boolean).join(' ') || 'Maschine';
+/** Neue/geänderte Maschine gegen alle offenen Suchaufträge prüfen und den Verkäufer informieren */
+function checkUsedHits(usedId, actorId) {
+  const m = usedCalc(get(`${USED_SQL} WHERE m.id=?`, usedId));
+  if (!m || m.status === 'verkauft') return 0;
+  let n = 0;
+  for (const s of all(`${SEARCH_SQL} WHERE s.status='offen'`)) {
+    if (!searchMatches(s, m) || get('SELECT 1 FROM search_hits WHERE search_id=? AND used_id=?', s.id, m.id)) continue;
+    run('INSERT INTO search_hits(search_id, used_id) VALUES(?,?)', s.id, m.id);
+    n++;
+    const who = s.user_id || s.created_by;
+    if (!who) continue;
+    const text = `Passende Maschine für ${s.kunde_name}: ${m.title}${m.year ? ' Bj. ' + m.year : ''}${m.asking_price != null ? ' für ' + m.asking_price.toLocaleString('de-DE') + ' €' : ''} (Suchauftrag: ${searchTitle(s)})`;
+    const tid = Number(run(`INSERT INTO tasks(customer_id, kind, title, description, due_date, assigned_to, created_by) VALUES(?,?,?,?,?,?,?)`,
+      s.customer_id, 'anruf', `Kunde informieren: ${m.title} passt zum Suchauftrag`.slice(0, 200),
+      `${text}\n${s.kunde_tel ? 'Telefon: ' + s.kunde_tel + '\n' : ''}Maschine im CRM: Gebrauchte → Nr. ${m.id}`, U.today(), who, actorId || null).lastInsertRowid);
+    L.notify(who, text, tid, s.customer_id, `#/gebrauchte/${m.id}`);
+  }
+  return n;
+}
+function usedQuery(q) {
+  const where = []; const p = [];
+  if (!q.status) where.push("m.status<>'verkauft'"); else if (q.status !== '*') { where.push('m.status=?'); p.push(q.status); }
+  if (q.category) { where.push('m.category=?'); p.push(q.category); }
+  if (q.q) { where.push("(m.brand || ' ' || COALESCE(m.model,'') || ' ' || COALESCE(m.category,'') || ' ' || COALESCE(m.serial,'') || ' ' || m.equipment || ' ' || m.location) LIKE ?"); p.push(`%${q.q}%`); }
+  const rows = all(`${USED_SQL} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY m.in_date, m.id`, ...p).map(usedCalc);
+  const open = all(`${SEARCH_SQL} WHERE s.status='offen'`);
+  for (const r of rows) r.matches = open.filter((s) => searchMatches(s, r)).length;
+  return rows;
+}
+app.get('/api/used', auth, (req, res) => {
+  const rows = usedQuery(req.query);
+  const stock = all(`SELECT * FROM used_machines WHERE status<>'verkauft'`).map(usedCalc);
+  const sum = (k) => stock.reduce((a, r) => a + (r[k] || 0), 0);
+  res.json({
+    rows, statuses: USED_STATUS,
+    categories: all("SELECT DISTINCT category FROM used_machines WHERE category IS NOT NULL AND category<>'' ORDER BY category").map((r) => r.category),
+    stats: { count: stock.length, ek: sum('purchase_price'), vk: sum('asking_price'), avg_days: stock.length ? Math.round(sum('days') / stock.length) : null, old: stock.filter((r) => r.days > 180).length, searches: get("SELECT COUNT(*) n FROM searches WHERE status='offen'").n },
+  });
+});
+app.get('/api/used/:id', auth, (req, res) => {
+  const m = get(`${USED_SQL} WHERE m.id=?`, req.params.id);
+  if (!m) return res.status(404).json({ error: 'Maschine nicht gefunden' });
+  const r = usedCalc(m);
+  r.photos = all('SELECT id FROM used_photos WHERE used_id=? ORDER BY sort, id', m.id).map((f) => f.id);
+  r.searches = all(`${SEARCH_SQL} WHERE s.status='offen'`).filter((s) => searchMatches(s, r)).map((s) => ({ id: s.id, kunde_name: s.kunde_name, kunde_ort: s.kunde_ort, kunde_tel: s.kunde_tel, customer_id: s.customer_id, title: searchTitle(s), max_price: s.max_price, user_name: s.user_name }));
+  res.json(r);
+});
+app.post('/api/used', auth, (req, res) => {
+  const { m, error } = cleanUsed(req.body || {}, req.user);
+  if (error) return bad(res, error);
+  const id = Number(run(`INSERT INTO used_machines(${USED_FIELDS.join(',')}, created_by) VALUES(${USED_FIELDS.map(() => '?').join(',')}, ?)`, ...USED_FIELDS.map((f) => m[f]), req.user.id).lastInsertRowid);
+  const hits = checkUsedHits(id, req.user.id);
+  res.json({ id, hits });
+});
+app.put('/api/used/:id', auth, (req, res) => {
+  const old = get('SELECT * FROM used_machines WHERE id=?', req.params.id);
+  if (!old) return res.status(404).json({ error: 'Maschine nicht gefunden' });
+  const { m, error } = cleanUsed({ ...old, ...req.body }, req.user);
+  if (error) return bad(res, error);
+  if (m.status !== 'verkauft' && old.status === 'verkauft') { m.sold_date = null; }
+  run(`UPDATE used_machines SET ${USED_FIELDS.map((f) => f + '=?').join(',')}, sold_date=CASE WHEN ?='verkauft' THEN COALESCE(sold_date, ?) ELSE NULL END, updated_at=datetime('now','localtime') WHERE id=?`, ...USED_FIELDS.map((f) => m[f]), m.status, U.today(), old.id);
+  const hits = checkUsedHits(old.id, req.user.id);
+  res.json({ ok: true, hits });
+});
+app.delete('/api/used/:id', auth, (req, res) => {
+  const old = get('SELECT * FROM used_machines WHERE id=?', req.params.id);
+  if (!old) return res.status(404).json({ error: 'Maschine nicht gefunden' });
+  if (req.user.role !== 'admin' && old.created_by !== req.user.id && old.user_id !== req.user.id) return res.status(403).json({ error: 'Nur der Zuständige oder ein Administrator kann die Maschine löschen' });
+  const photos = all('SELECT stored_name FROM used_photos WHERE used_id=?', old.id);
+  run('DELETE FROM used_machines WHERE id=?', old.id);
+  for (const f of photos) fs.rm(path.join(DATA_DIR, 'files', f.stored_name), () => {});
+  res.json({ ok: true });
+});
+const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+app.post('/api/used/:id/photos', auth, express.raw({ type: () => true, limit: '25mb' }), (req, res) => {
+  const m = get('SELECT id FROM used_machines WHERE id=?', req.params.id);
+  if (!m) return res.status(404).json({ error: 'Maschine nicht gefunden' });
+  const mime = String(req.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
+  if (!PHOTO_TYPES.includes(mime)) return bad(res, 'Bitte ein Foto (JPG/PNG) hochladen');
+  if (!req.body || !req.body.length) return bad(res, 'Leere Datei');
+  if (get('SELECT COUNT(*) n FROM used_photos WHERE used_id=?', m.id).n >= 30) return bad(res, 'Maximal 30 Fotos pro Maschine');
+  const stored = `used${m.id}_${U.token(12)}`;
+  fs.writeFileSync(path.join(DATA_DIR, 'files', stored), req.body);
+  const sort = get('SELECT COALESCE(MAX(sort),0)+1 n FROM used_photos WHERE used_id=?', m.id).n;
+  const r = run('INSERT INTO used_photos(used_id, stored_name, mime, sort) VALUES(?,?,?,?)', m.id, stored, mime, sort);
+  res.json({ id: Number(r.lastInsertRowid) });
+});
+app.get('/api/used-photos/:id', auth, (req, res) => {
+  const f = get('SELECT * FROM used_photos WHERE id=?', req.params.id);
+  if (!f) return res.status(404).end();
+  res.set('Content-Type', PHOTO_TYPES.includes(f.mime) ? f.mime : 'application/octet-stream');
+  res.set('Cache-Control', 'private, max-age=86400');
+  res.sendFile(path.join(DATA_DIR, 'files', f.stored_name));
+});
+app.delete('/api/used-photos/:id', auth, (req, res) => {
+  const f = get('SELECT * FROM used_photos WHERE id=?', req.params.id);
+  if (!f) return res.status(404).json({ error: 'Foto nicht gefunden' });
+  run('DELETE FROM used_photos WHERE id=?', f.id);
+  fs.rm(path.join(DATA_DIR, 'files', f.stored_name), () => {});
+  res.json({ ok: true });
+});
+app.post('/api/used-photos/:id/first', auth, (req, res) => { // als Titelbild
+  const f = get('SELECT * FROM used_photos WHERE id=?', req.params.id);
+  if (!f) return res.status(404).json({ error: 'Foto nicht gefunden' });
+  run('UPDATE used_photos SET sort=sort+1 WHERE used_id=?', f.used_id); run('UPDATE used_photos SET sort=0 WHERE id=?', f.id);
+  res.json({ ok: true });
+});
+/** Exposé zum Drucken / als PDF speichern */
+app.get('/api/used/:id/expose.html', auth, (req, res) => {
+  const m0 = get(`${USED_SQL} WHERE m.id=?`, req.params.id);
+  if (!m0) return res.status(404).send('Nicht gefunden');
+  const m = usedCalc(m0);
+  const photos = all('SELECT id FROM used_photos WHERE used_id=? ORDER BY sort, id', m.id).map((f) => f.id);
+  const h = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const e0 = (n) => Math.round(n).toLocaleString('de-DE') + ' €';
+  const showPrice = req.query.price !== '0';
+  const seller = get('SELECT name, email FROM users WHERE id=?', m.user_id);
+  const specs = [['Hersteller', m.brand], ['Modell', m.model], ['Maschinenart', m.category], ['Baujahr', m.year], ['Betriebsstunden', m.hours != null ? m.hours.toLocaleString('de-DE') + ' h' : ''], ['Zustand', m.condition === 'vorfuehr' ? 'Vorführmaschine' : 'Gebraucht'], ['Seriennummer', req.query.serial === '1' ? m.serial : ''], ['Standort', m.location || 'Havixbeck']].filter(([, v]) => v);
+  const eq = String(m.equipment || '').split(/\n|,(?=\s)(?![^(]*\))/).map((s) => s.trim()).filter(Boolean);
+  res.set('Content-Security-Policy', "default-src 'self'; img-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'unsafe-inline'");
+  res.type('html').send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><title>Exposé ${h(m.title)}</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;700;800&display=swap">
+<style>@page{size:A4;margin:14mm}*{box-sizing:border-box}body{font-family:'Nunito Sans',Arial,sans-serif;color:#222;margin:0;font-size:12.5px}
+.top{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #c0292f;padding-bottom:8px}.top img{height:54px}.top .c{text-align:right;color:#6a6d6e;font-size:11px;line-height:1.4}
+h1{font-size:26px;margin:14px 0 2px;font-weight:800}.sub{color:#6a6d6e;font-size:14px;margin-bottom:10px}
+.ph{display:grid;grid-template-columns:2fr 1fr;gap:6px;margin:10px 0}.ph img{width:100%;object-fit:cover;border-radius:4px;display:block}.ph .main{height:300px}.ph .side{display:grid;gap:6px;grid-auto-rows:97px}.ph .side img{height:97px}
+.ph.one{grid-template-columns:1fr}.ph.one .main{height:340px}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:8px}table{width:100%;border-collapse:collapse}td{padding:5px 0;border-bottom:1px solid #e3e3e3;vertical-align:top}td:first-child{color:#6a6d6e;width:42%}
+h2{font-size:14px;color:#c0292f;text-transform:uppercase;letter-spacing:.04em;margin:12px 0 6px}ul{margin:0;padding-left:18px}li{margin:2px 0}
+.price{background:#c0292f;color:#fff;border-radius:6px;padding:12px 16px;margin-top:12px}.price b{font-size:24px;display:block}.price span{font-size:11.5px;opacity:.9}
+.desc{white-space:pre-wrap;line-height:1.45}.foot{margin-top:16px;border-top:1px solid #ddd;padding-top:8px;color:#6a6d6e;font-size:10.5px;display:flex;justify-content:space-between;gap:10px}
+.contact{background:#f4f4f4;border-radius:6px;padding:10px 14px;margin-top:12px;line-height:1.5}
+@media screen{body{max-width:820px;margin:20px auto;padding:0 16px}}</style></head><body>
+<div class="top"><img src="/img/logo.png" alt="Bussmann Land- &amp; Gartentechnik"><div class="c">Bussmann Land- &amp; Gartentechnik<br>Hauptstraße 5 · 48329 Havixbeck<br>Tel. 02507 1294 · info@bussmann-havixbeck.de</div></div>
+<h1>${h(m.title)}</h1><div class="sub">${h([m.category, m.year ? 'Baujahr ' + m.year : '', m.hours != null ? m.hours.toLocaleString('de-DE') + ' Betriebsstunden' : ''].filter(Boolean).join(' · '))}</div>
+${photos.length ? `<div class="ph ${photos.length === 1 ? 'one' : ''}"><img class="main" src="/api/used-photos/${photos[0]}" alt="">${photos.length > 1 ? `<div class="side">${photos.slice(1, 4).map((p) => `<img src="/api/used-photos/${p}" alt="">`).join('')}</div>` : ''}</div>` : ''}
+<div class="cols"><div><h2>Technische Daten</h2><table>${specs.map(([k, v]) => `<tr><td>${h(k)}</td><td><b>${h(v)}</b></td></tr>`).join('')}</table>
+${showPrice ? `<div class="price">${m.asking_price != null ? `<b>${e0(m.asking_price)}</b><span>zzgl. 19 % MwSt. (${e0(m.asking_price * 1.19)} inkl. MwSt.) · Finanzierung und Leasing möglich</span>` : '<b>Preis auf Anfrage</b><span>Finanzierung und Leasing möglich</span>'}</div>` : ''}
+<div class="contact"><b>Ihr Ansprechpartner</b><br>${h(seller ? seller.name : 'Bussmann Land- & Gartentechnik')}<br>Telefon 02507 1294${seller && seller.email ? '<br>' + h(seller.email) : ''}</div></div>
+<div>${eq.length ? `<h2>Ausstattung</h2><ul>${eq.map((x) => `<li>${h(x)}</li>`).join('')}</ul>` : ''}${m.description ? `<h2>Beschreibung</h2><div class="desc">${h(m.description)}</div>` : ''}</div></div>
+${photos.length > 4 ? `<div class="ph" style="grid-template-columns:repeat(4,1fr)">${photos.slice(4, 12).map((p) => `<img src="/api/used-photos/${p}" style="height:110px" alt="">`).join('')}</div>` : ''}
+<div class="foot"><span>Angebot freibleibend, Zwischenverkauf und Irrtümer vorbehalten. Stand ${U.today().split('-').reverse().join('.')}</span><span>Nr. G-${m.id}</span></div>
+<script>window.addEventListener('load',()=>setTimeout(()=>window.print(),400));</script></body></html>`);
+});
+// Suchaufträge
+const SEARCH_FIELDS = ['customer_id', 'kunde', 'telefon', 'user_id', 'category', 'brand', 'model', 'max_price', 'min_year', 'max_hours', 'notes', 'status'];
+function cleanSearch(b, user) {
+  const s = {
+    customer_id: b.customer_id && get('SELECT id FROM customers WHERE id=?', b.customer_id) ? Number(b.customer_id) : null,
+    kunde: U.str(b.kunde, 200) || '', telefon: U.str(b.telefon, 60) || '',
+    user_id: b.user_id && get('SELECT id FROM users WHERE id=?', b.user_id) ? Number(b.user_id) : user.id,
+    category: U.str(b.category, 60) || '', brand: U.str(b.brand, 60) || '', model: U.str(b.model, 100) || '',
+    max_price: money(b.max_price), min_year: intOrNull(b.min_year, 1900, 2200), max_hours: intOrNull(b.max_hours, 0, 1000000),
+    notes: U.str(b.notes, 3000) || '', status: b.status === 'erledigt' ? 'erledigt' : 'offen',
+  };
+  if (Number.isNaN(s.max_price)) return { error: 'Bitte den Preis als Zahl eingeben' };
+  if (!s.customer_id && !s.kunde) return { error: 'Bitte einen Kunden auswählen oder den Namen eintragen' };
+  if (!s.category && !s.brand && !s.model) return { error: 'Bitte angeben, was gesucht wird (Art, Marke oder Modell)' };
+  return { s };
+}
+const searchOut = (s, stock) => ({ ...s, title: searchTitle(s), matches: stock.filter((m) => searchMatches(s, m)).map((m) => ({ id: m.id, title: m.title, year: m.year, hours: m.hours, asking_price: m.asking_price, status: m.status, photo_id: m.photo_id })) });
+app.get('/api/searches', auth, (req, res) => {
+  const stock = all(`${USED_SQL} WHERE m.status<>'verkauft'`).map(usedCalc);
+  const st = req.query.status === '*' ? '' : req.query.status === 'erledigt' ? "WHERE s.status='erledigt'" : "WHERE s.status='offen'";
+  const where = req.query.customer ? `${st ? st + ' AND' : 'WHERE'} s.customer_id=${Number(req.query.customer) || 0}` : st;
+  res.json(all(`${SEARCH_SQL} ${where} ORDER BY s.created_at DESC`).map((s) => searchOut(s, stock)));
+});
+app.get('/api/searches/:id', auth, (req, res) => {
+  const s = get(`${SEARCH_SQL} WHERE s.id=?`, req.params.id);
+  if (!s) return res.status(404).json({ error: 'Suchauftrag nicht gefunden' });
+  res.json(searchOut(s, all(`${USED_SQL} WHERE m.status<>'verkauft'`).map(usedCalc)));
+});
+app.post('/api/searches', auth, (req, res) => {
+  const { s, error } = cleanSearch(req.body || {}, req.user);
+  if (error) return bad(res, error);
+  const id = Number(run(`INSERT INTO searches(${SEARCH_FIELDS.join(',')}, created_by) VALUES(${SEARCH_FIELDS.map(() => '?').join(',')}, ?)`, ...SEARCH_FIELDS.map((f) => s[f]), req.user.id).lastInsertRowid);
+  if (s.customer_id) L.systemEntry(s.customer_id, req.user.id, `Suchauftrag angelegt: ${searchTitle(s)}${s.max_price != null ? ' bis ' + s.max_price.toLocaleString('de-DE') + ' €' : ''}`);
+  const out = searchOut(get(`${SEARCH_SQL} WHERE s.id=?`, id), all(`${USED_SQL} WHERE m.status<>'verkauft'`).map(usedCalc));
+  for (const m of out.matches) run('INSERT OR IGNORE INTO search_hits(search_id, used_id) VALUES(?,?)', id, m.id); // schon bekannt, keine Meldung nötig
+  res.json(out);
+});
+app.put('/api/searches/:id', auth, (req, res) => {
+  const old = get('SELECT * FROM searches WHERE id=?', req.params.id);
+  if (!old) return res.status(404).json({ error: 'Suchauftrag nicht gefunden' });
+  const { s, error } = cleanSearch({ ...old, ...req.body }, req.user);
+  if (error) return bad(res, error);
+  run(`UPDATE searches SET ${SEARCH_FIELDS.map((f) => f + '=?').join(',')}, updated_at=datetime('now','localtime') WHERE id=?`, ...SEARCH_FIELDS.map((f) => s[f]), old.id);
+  if (s.customer_id && old.status !== s.status) L.systemEntry(s.customer_id, req.user.id, `Suchauftrag ${searchTitle(s)}: ${s.status === 'erledigt' ? 'erledigt' : 'wieder offen'}`);
+  const out = searchOut(get(`${SEARCH_SQL} WHERE s.id=?`, old.id), all(`${USED_SQL} WHERE m.status<>'verkauft'`).map(usedCalc));
+  for (const m of out.matches) run('INSERT OR IGNORE INTO search_hits(search_id, used_id) VALUES(?,?)', old.id, m.id);
+  res.json(out);
+});
+app.delete('/api/searches/:id', auth, (req, res) => {
+  const old = get('SELECT * FROM searches WHERE id=?', req.params.id);
+  if (!old) return res.status(404).json({ error: 'Suchauftrag nicht gefunden' });
+  run('DELETE FROM searches WHERE id=?', old.id);
   res.json({ ok: true });
 });
 

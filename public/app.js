@@ -149,6 +149,7 @@ const ICONS = {
   link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   euro: '<path d="M17.5 6.2A7 7 0 1 0 17.5 17.8"/><path d="M4 10h9M4 14h9"/>',
+  tractor: '<circle cx="7" cy="17" r="3.5"/><circle cx="18" cy="18" r="2.5"/><path d="M10.5 17h5M3.5 15V9h7l2 5h7v3.5M5 9V5h4l1.5 4M15 14V9"/>',
   box: '<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
   target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/>',
 };
@@ -286,7 +287,7 @@ function route() {
   const main = $('#main');
   main.innerHTML = '<div class="empty">Lädt …</div>';
   window.scrollTo(0, 0);
-  const views = { '': viewDashboard, start: viewDashboard, kunden: p1 ? () => viewCustomer(Number(p1)) : viewCustomers, aufgaben: viewTasks, kalender: viewCalendar, karte: viewMap, verkaeufe: viewSales, projekte: viewProjects, einstellungen: viewSettings };
+  const views = { '': viewDashboard, start: viewDashboard, kunden: p1 ? () => viewCustomer(Number(p1)) : viewCustomers, aufgaben: viewTasks, kalender: viewCalendar, karte: viewMap, verkaeufe: viewSales, projekte: viewProjects, gebrauchte: () => viewUsed(main, p1), einstellungen: viewSettings };
   (views[p0] || viewDashboard)(main).catch(fail);
   if (p0 === 'aufgaben' && p1) openTask(Number(p1));
 }
@@ -363,7 +364,7 @@ function renderSetup() {
 
 // ======================= Grundgerüst =======================
 function renderShell() {
-  const nav = [['start', 'home', 'Übersicht'], ['kunden', 'users', 'Kunden'], ['karte', 'map', 'Karte'], ['aufgaben', 'tasks', 'Aufgaben'], ['kalender', 'cal', 'Kalender'], ['projekte', 'target', 'Projekte'], ['verkaeufe', 'euro', 'Verkäufe'], ['einstellungen', 'gear', 'Einstellungen']];
+  const nav = [['start', 'home', 'Übersicht'], ['kunden', 'users', 'Kunden'], ['karte', 'map', 'Karte'], ['aufgaben', 'tasks', 'Aufgaben'], ['kalender', 'cal', 'Kalender'], ['projekte', 'target', 'Projekte'], ['gebrauchte', 'tractor', 'Gebrauchte'], ['verkaeufe', 'euro', 'Verkäufe'], ['einstellungen', 'gear', 'Einstellungen']];
   $('#app').innerHTML = `<div class="shell">
     <header class="topbar">
       <a class="brand" href="#/"><img src="img/logo.png" alt="Bussmann Land- & Gartentechnik"></a>
@@ -383,7 +384,7 @@ function renderShell() {
     <aside class="sidebar"><nav class="nav">${nav.map(([r, i, l]) => `<a href="#/${r === 'start' ? '' : r}" data-r="${r}">${icon(i, 'lg')}${l}</a>`).join('')}</nav>
       <div class="foot">Bussmann Land- &amp; Gartentechnik<br>Wenn Sie Qualität und Service schätzen!</div></aside>
     <main class="main" id="main"></main>
-    <nav class="mobile-nav">${nav.filter(([r]) => !['karte', 'verkaeufe'].includes(r)).map(([r, i, l]) => `<a href="#/${r === 'start' ? '' : r}" data-r="${r}">${icon(i, 'lg')}${l === 'Einstellungen' ? 'Mehr' : l}</a>`).join('')}</nav>
+    <nav class="mobile-nav">${nav.filter(([r]) => !['karte', 'verkaeufe', 'gebrauchte'].includes(r)).map(([r, i, l]) => `<a href="#/${r === 'start' ? '' : r}" data-r="${r}">${icon(i, 'lg')}${l === 'Einstellungen' ? 'Mehr' : l}</a>`).join('')}</nav>
   </div>`;
   $('#logout').onclick = async () => { await api('/logout', { method: 'POST', body: {} }); state.me = null; location.hash = ''; renderLogin(); };
   $('#quick-task').onclick = () => openTaskForm({});
@@ -420,13 +421,13 @@ async function toggleNotifications(e) {
   const dd = document.createElement('div');
   dd.className = 'dropdown'; dd.id = 'notif-dd';
   dd.innerHTML = `<div class="card-head" style="display:flex;padding:10px 14px;border-bottom:1px solid var(--line)"><b style="margin-right:auto">Hinweise</b><button class="btn ghost sm" id="mark-all">Alle gelesen</button></div>` +
-    (list.length ? list.map((n) => `<div class="item ${n.read ? '' : 'unread'}" data-id="${n.id}" data-task="${n.task_id || ''}" data-cust="${n.customer_id || ''}">${esc(n.text)}<div class="muted small">${deDateTime(n.created_at.replace(' ', 'T'))}</div></div>`).join('') : '<div class="empty">Keine Hinweise</div>');
+    (list.length ? list.map((n) => `<div class="item ${n.read ? '' : 'unread'}" data-id="${n.id}" data-task="${n.task_id || ''}" data-cust="${n.customer_id || ''}" data-link="${esc(n.link || '')}">${esc(n.text)}<div class="muted small">${deDateTime(n.created_at.replace(' ', 'T'))}</div></div>`).join('') : '<div class="empty">Keine Hinweise</div>');
   $('#bell').parentElement.appendChild(dd);
   $('#mark-all', dd).onclick = async (ev) => { ev.stopPropagation(); await api('/notifications/read', { method: 'POST', body: {} }); dd.remove(); refreshUnread(); };
   $$('.item', dd).forEach((it) => it.onclick = async () => {
     await api('/notifications/read', { method: 'POST', body: { id: Number(it.dataset.id) } });
     dd.remove(); refreshUnread();
-    if (it.dataset.task) openTask(Number(it.dataset.task)); else if (it.dataset.cust) location.hash = '#/kunden/' + it.dataset.cust;
+    if (it.dataset.link) location.hash = it.dataset.link; else if (it.dataset.task) openTask(Number(it.dataset.task)); else if (it.dataset.cust) location.hash = '#/kunden/' + it.dataset.cust;
   });
   const close = (ev) => { if (!dd.contains(ev.target)) { dd.remove(); document.removeEventListener('click', close); } };
   setTimeout(() => document.addEventListener('click', close));
@@ -1566,6 +1567,209 @@ async function openProjectForm(p, onSaved) {
   };
 }
 
+// ======================= Gebrauchtmaschinen & Suchaufträge =======================
+const USED_STATUS = { verfuegbar: 'Verfügbar', reserviert: 'Reserviert', verkauft: 'Verkauft' };
+const standCls = (d) => (d == null ? '' : d > 180 ? 'neg' : d > 90 ? 'mid' : 'pos');
+const usedSpecs = (m) => [m.year ? 'Bj. ' + m.year : '', m.hours != null ? Number(m.hours).toLocaleString('de-DE') + ' h' : '', m.condition === 'vorfuehr' ? 'Vorführer' : ''].filter(Boolean).join(' · ');
+const thumb = (pid, cls = 'thumb') => (pid ? `<img class="${cls}" src="/api/used-photos/${pid}" alt="" loading="lazy">` : `<span class="${cls} empty-thumb">${icon('tractor')}</span>`);
+
+async function viewUsed(main, sub) {
+  const tab = sub === 'suche' ? 'suche' : 'lager';
+  const openId = /^\d+$/.test(sub || '') ? Number(sub) : null;
+  const st = { status: '', category: '', q: '', sstatus: '' };
+  main.innerHTML = `
+    <div class="page-head"><h1>Gebrauchtmaschinen</h1><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="u-search">${icon('search')} Suchauftrag anlegen</button><button class="btn primary" id="u-new">${icon('plus')} Maschine aufnehmen</button></div></div>
+    <div class="tabs"><a href="#/gebrauchte" class="${tab === 'lager' ? 'on' : ''}">${icon('tractor')} Lager</a><a href="#/gebrauchte/suche" class="${tab === 'suche' ? 'on' : ''}">${icon('search')} Suchaufträge <span class="badge grey" id="u-scount"></span></a></div>
+    <div id="u-kpis" class="kpis kpis-6"></div>
+    <div class="toolbar" id="u-bar"></div>
+    <div class="card"><div class="table-wrap" id="u-list"></div></div>`;
+  const loadLager = async () => {
+    const d = await api('/used?' + new URLSearchParams({ status: st.status, category: st.category, q: st.q }));
+    const s = d.stats;
+    $('#u-scount').textContent = s.searches || '';
+    $('#u-kpis').innerHTML = [['Im Lager', s.count], ['Lagerwert (EK)', eur(s.ek) || '0 €'], ['Angebotswert', eur(s.vk) || '0 €'], ['Ø Standzeit', s.avg_days == null ? '–' : s.avg_days + ' Tage'], ['Länger als 180 Tage', s.old, s.old > 0], ['Offene Suchaufträge', s.searches]]
+      .map(([l, v, a]) => `<div class="kpi ${a ? 'alert' : ''}"><div class="l">${l}</div><div class="v">${v}</div></div>`).join('');
+    if (!$('#u-status')) {
+      $('#u-bar').innerHTML = `<div class="grow"><span class="ico">${icon('search')}</span><input type="search" id="u-q" placeholder="Suchen: Marke, Modell, Ausstattung, Seriennr. …"></div>
+        <select id="u-status" style="width:auto"><option value="">Verfügbar &amp; reserviert</option><option value="verfuegbar">Nur verfügbar</option><option value="reserviert">Nur reserviert</option><option value="verkauft">Verkauft</option><option value="*">Alle</option></select>
+        <select id="u-cat" style="width:auto"><option value="">Alle Maschinenarten</option>${d.categories.map((c) => `<option>${esc(c)}</option>`).join('')}</select>`;
+      $('#u-q').oninput = debounce((e) => { st.q = e.target.value; loadLager(); });
+      $('#u-status').onchange = (e) => { st.status = e.target.value; loadLager(); };
+      $('#u-cat').onchange = (e) => { st.category = e.target.value; loadLager(); };
+    }
+    $('#u-list').innerHTML = d.rows.length ? `<table class="list used"><thead><tr><th></th><th>Maschine</th><th class="hide-m">Standort / Herkunft</th><th class="num">Standzeit</th><th class="num hide-m">EK</th><th class="num">Wunschpreis</th><th class="num hide-m">Spanne</th><th>Status</th></tr></thead><tbody>
+      ${d.rows.map((m) => `<tr data-uid="${m.id}" class="click"><td style="width:76px">${thumb(m.photo_id)}</td>
+        <td><b>${esc(m.title)}</b>${m.category && (m.brand || m.model) ? ` <span class="chip">${esc(m.category)}</span>` : ''}<div class="muted small">${esc(usedSpecs(m))}${m.photo_count ? ` · ${m.photo_count} Foto${m.photo_count > 1 ? 's' : ''}` : ' · <span class="warn-t">ohne Fotos</span>'}</div>
+          ${m.matches ? `<div class="small"><span class="chip ok">${icon('user')} ${m.matches} Suchauftrag${m.matches > 1 ? 'e' : ''} passt</span></div>` : ''}</td>
+        <td class="hide-m small">${esc(m.location || '')}<div class="muted">${esc(m.origin || '')}${m.customer_name ? ' · ' + esc(m.customer_name) : ''}</div></td>
+        <td class="num nowrap"><span class="pct ${standCls(m.days)}">${m.days ?? '–'} Tage</span><div class="muted small">seit ${deDate(m.in_date)}</div></td>
+        <td class="num hide-m">${m.purchase_price != null ? eur(m.purchase_price) : '<span class="muted small">–</span>'}</td>
+        <td class="num"><b>${m.asking_price != null ? eur(m.asking_price) : '<span class="muted small">offen</span>'}</b></td>
+        <td class="num hide-m">${m.margin != null ? eur(m.margin) : ''}</td>
+        <td><span class="ustat ${m.status}">${USED_STATUS[m.status]}</span>${m.status === 'verkauft' && m.sold_date ? `<div class="muted small">${deDate(m.sold_date)}</div>` : ''}</td></tr>`).join('')}</tbody></table>`
+      : `<div class="empty">${st.q || st.status || st.category ? 'Keine Maschinen für diesen Filter.' : 'Noch keine Gebrauchtmaschinen im Lager. Gebrauchte Einkäufe und Inzahlungnahmen landen automatisch hier – oder mit „Maschine aufnehmen“ selbst anlegen.'}</div>`;
+    $$('#u-list tr[data-uid]').forEach((tr) => tr.onclick = () => openUsedForm(Number(tr.dataset.uid), loadLager));
+  };
+  const loadSuche = async () => {
+    const [rows, d] = await Promise.all([api('/searches?status=' + st.sstatus), api('/used')]);
+    const s = d.stats;
+    $('#u-scount').textContent = s.searches || '';
+    $('#u-kpis').innerHTML = [['Offene Suchaufträge', s.searches], ['Mit passender Maschine', rows.filter((r) => r.matches.length).length, rows.some((r) => r.matches.length)], ['Im Lager', s.count]]
+      .map(([l, v, a]) => `<div class="kpi ${a ? 'alert ok' : ''}"><div class="l">${l}</div><div class="v">${v}</div></div>`).join('');
+    if (!$('#u-sstat')) {
+      $('#u-bar').innerHTML = `<select id="u-sstat" style="width:auto"><option value="">Offene Suchaufträge</option><option value="erledigt">Erledigte</option><option value="*">Alle</option></select><span class="muted small">Kommt eine passende Maschine ins Lager, bekommt der Verkäufer automatisch eine Aufgabe „Kunde informieren“.</span>`;
+      $('#u-sstat').onchange = (e) => { st.sstatus = e.target.value; loadSuche(); };
+    }
+    $('#u-list').innerHTML = rows.length ? `<table class="list"><thead><tr><th>Kunde</th><th>Sucht</th><th class="hide-m">Bedingungen</th><th class="hide-m">Verkäufer</th><th>Passende Maschinen</th></tr></thead><tbody>
+      ${rows.map((r) => `<tr data-sid="${r.id}" class="click"><td><b>${esc(r.kunde_name || '')}</b><div class="muted small">${esc([r.kunde_ort, r.kunde_tel].filter(Boolean).join(' · '))}</div></td>
+        <td><b>${esc(r.title)}</b>${r.status === 'erledigt' ? ' <span class="chip">erledigt</span>' : ''}<div class="muted small">seit ${deDate(r.created_at)}</div></td>
+        <td class="hide-m small">${[r.max_price != null ? 'bis ' + eur(r.max_price) : '', r.min_year ? 'ab Bj. ' + r.min_year : '', r.max_hours != null ? 'max. ' + Number(r.max_hours).toLocaleString('de-DE') + ' h' : ''].filter(Boolean).join(' · ') || '<span class="muted">–</span>'}${r.notes ? `<div class="muted">${esc(r.notes)}</div>` : ''}</td>
+        <td class="hide-m">${esc(r.user_name || '')}</td>
+        <td>${r.matches.length ? r.matches.map((m) => `<a href="#/gebrauchte/${m.id}" class="chip ok" onclick="event.stopPropagation()">${esc(m.title)}${m.asking_price != null ? ' · ' + eur(m.asking_price) : ''}</a>`).join(' ') : '<span class="muted small">noch keine</span>'}</td></tr>`).join('')}</tbody></table>`
+      : `<div class="empty">${st.sstatus ? 'Keine Suchaufträge für diesen Filter.' : 'Noch keine offenen Suchaufträge. Wenn ein Kunde etwas sucht, das gerade nicht da ist: „Suchauftrag anlegen“.'}</div>`;
+    $$('#u-list tr[data-sid]').forEach((tr) => tr.onclick = async () => openSearchForm(await api('/searches/' + tr.dataset.sid), loadSuche));
+  };
+  const reload = tab === 'suche' ? loadSuche : loadLager;
+  $('#u-new').onclick = () => openUsedForm(null, loadLager);
+  $('#u-search').onclick = () => openSearchForm({}, () => { if (tab === 'suche') loadSuche(); else location.hash = '#/gebrauchte/suche'; });
+  await reload();
+  if (openId) openUsedForm(openId, loadLager);
+}
+
+async function openUsedForm(id, onSaved) {
+  const m = id ? await api('/used/' + id) : { status: 'verfuegbar', in_date: todayISO(), condition: 'gebraucht', user_id: state.me.id, photos: [], searches: [] };
+  const isEdit = !!m.id;
+  const meta = state.meta || await loadMeta();
+  const cats = [...new Set([...MACHINE_CATS, 'Hoftrac', 'Radlader', 'Teleskoplader', 'Kompakttraktor', ...meta.categories])];
+  let changed = false;
+  const md = modal({
+    title: isEdit ? `${esc(m.title)} <span class="muted small">Nr. G-${m.id}</span>` : 'Gebrauchtmaschine aufnehmen', wide: true,
+    onClose: () => { if (changed && onSaved) onSaved(); },
+    body: `<form id="uf"><div class="form-grid">
+      ${isEdit ? `<div class="full"><div class="photo-strip" id="uf-photos"></div></div>` : ''}
+      ${isEdit && m.searches.length ? `<div class="full callout ok">${icon('user')} <b>Passt zu ${m.searches.length} Suchauftrag${m.searches.length > 1 ? 'en' : ''}:</b> ${m.searches.map((s) => `<div class="small" style="margin-top:4px">${s.customer_id ? `<a href="#/kunden/${s.customer_id}">${esc(s.kunde_name)}</a>` : esc(s.kunde_name)}${s.kunde_ort ? ', ' + esc(s.kunde_ort) : ''}${s.kunde_tel ? ` · <a href="${telHref(s.kunde_tel)}">${esc(s.kunde_tel)}</a>` : ''} – sucht ${esc(s.title)}${s.max_price != null ? ' bis ' + eur(s.max_price) : ''} <span class="muted">(${esc(s.user_name || '')})</span></div>`).join('')}</div>` : ''}
+      <div class="sec full">Maschine</div>
+      <div class="field"><label>Maschinenart</label><input type="text" name="category" list="uf-cats" value="${esc(m.category || '')}" placeholder="z. B. Hoftrac"><datalist id="uf-cats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></div>
+      <div class="field"><label>Marke</label><input type="text" name="brand" list="uf-brands" value="${esc(m.brand || '')}"><datalist id="uf-brands">${[...new Set([...PROJ_BRANDS, ...meta.brands])].map((c) => `<option value="${esc(c)}">`).join('')}</datalist></div>
+      <div class="field"><label>Modell</label><input type="text" name="model" value="${esc(m.model || '')}"></div>
+      <div class="field"><label>Seriennummer</label><input type="text" name="serial" value="${esc(m.serial || '')}"></div>
+      <div class="field"><label>Baujahr</label><input type="number" name="year" min="1950" max="2100" value="${esc(m.year || '')}"></div>
+      <div class="field"><label>Betriebsstunden</label><input type="number" name="hours" min="0" value="${m.hours ?? ''}"></div>
+      <div class="field"><label>Zustand</label><select name="condition"><option value="gebraucht">Gebraucht</option><option value="vorfuehr" ${m.condition === 'vorfuehr' ? 'selected' : ''}>Vorführmaschine</option></select></div>
+      <div class="field"><label>Standort</label><input type="text" name="location" value="${esc(m.location || '')}" placeholder="z. B. Halle 2, Hof"></div>
+      <div class="field full"><label>Ausstattung <span class="muted">(eine Zeile oder mit Komma getrennt – erscheint als Liste im Exposé)</span></label><textarea name="equipment" rows="2" placeholder="Kabine, Schaufel 1,0 m, Palettengabel, 3. Steuerkreis">${esc(m.equipment || '')}</textarea></div>
+      <div class="field full"><label>Beschreibung für das Exposé</label><textarea name="description" rows="3" placeholder="z. B. Sehr gepflegt, neue Reifen, Service frisch gemacht">${esc(m.description || '')}</textarea></div>
+      <div class="sec full">Preis &amp; Lager</div>
+      <div class="field"><label>Einkaufspreis netto (EK)</label><div class="money"><input type="text" inputmode="decimal" name="purchase_price" value="${eur2(m.purchase_price)}" placeholder="0,00"><span>€</span></div></div>
+      <div class="field"><label>Wunschpreis netto (VK)</label><div class="money"><input type="text" inputmode="decimal" name="asking_price" value="${eur2(m.asking_price)}" placeholder="0,00"><span>€</span></div></div>
+      <div class="field"><label>Im Lager seit</label><input type="date" name="in_date" value="${esc(m.in_date || todayISO())}"></div>
+      <div class="field"><label>Status</label><select name="status">${Object.entries(USED_STATUS).map(([k, v]) => `<option value="${k}" ${m.status === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      <div class="field"><label>Herkunft</label><input type="text" name="origin" value="${esc(m.origin || '')}" placeholder="z. B. Inzahlungnahme, Ankauf"></div>
+      <div class="field"><label>Zuständig</label><select name="user_id">${userOptions(m.user_id || state.me.id)}</select></div>
+      <div class="field full"><label>Vorbesitzer <span class="muted">(Kunde im CRM, optional)</span></label><div id="uf-cust"></div></div>
+      <div class="field full"><label>Interne Notizen <span class="muted">(nicht im Exposé)</span></label><textarea name="notes" rows="2">${esc(m.notes || '')}</textarea></div>
+      ${m.sale_id ? `<div class="full callout ok">${icon('check')} Verkauft am ${deDate(m.sold_date)} – steht unter „Verkäufe“. <button type="button" class="btn sm" id="uf-sale">${icon('euro')} Verkauf öffnen</button></div>` : ''}
+    </div></form>`,
+    foot: `<span class="left">${isEdit ? `<button class="btn danger" id="uf-del">${icon('trash')}</button> <a class="btn" target="_blank" rel="noopener" href="/api/used/${m.id}/expose.html">${icon('file')} Exposé</a>${m.status !== 'verkauft' ? ` <button class="btn" id="uf-sold">${icon('euro')} Verkauft …</button>` : ''}` : ''}</span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="uf-save">${isEdit ? 'Speichern' : 'Aufnehmen & Fotos hinzufügen'}</button>`,
+  });
+  const f = $('#uf', md.el);
+  const picker = customerPicker($('#uf-cust', md.el), m.customer_id ? { id: m.customer_id, name: m.customer_name || 'Kunde' } : null);
+  const drawPhotos = () => {
+    const box = $('#uf-photos', md.el); if (!box) return;
+    box.innerHTML = m.photos.map((p, i) => `<div class="ph-item"><img src="/api/used-photos/${p}" alt="" data-view="${p}">${i === 0 ? '<span class="ph-badge">Titelbild</span>' : `<button type="button" class="ph-first" data-first="${p}" title="Als Titelbild">★</button>`}<button type="button" class="ph-del" data-pdel="${p}" title="Foto löschen">${icon('x')}</button></div>`).join('')
+      + `<label class="ph-add">${icon('plus', 'lg')}<span>Fotos hinzufügen</span><input type="file" accept="image/*" multiple hidden></label>`;
+    $('.ph-add input', box).onchange = async (e) => {
+      const files = [...e.target.files]; if (!files.length) return;
+      const lbl = $('.ph-add span', box); lbl.textContent = `Lädt 0 / ${files.length} …`;
+      let n = 0;
+      for (const f0 of files) {
+        const file = await shrinkImage(f0);
+        try { const r = await api(`/used/${m.id}/photos`, { method: 'POST', raw: true, body: file, headers: { 'Content-Type': file.type || 'image/jpeg', 'X-Filename': encodeURIComponent(file.name) } }); m.photos.push(r.id); n++; lbl.textContent = `Lädt ${n} / ${files.length} …`; } catch (err) { fail(err); }
+      }
+      changed = true; drawPhotos();
+    };
+    $$('[data-pdel]', box).forEach((b) => b.onclick = async () => { if (!(await confirmBox('Dieses Foto löschen?'))) return; await api('/used-photos/' + b.dataset.pdel, { method: 'DELETE' }); m.photos = m.photos.filter((p) => p !== Number(b.dataset.pdel)); changed = true; drawPhotos(); });
+    $$('[data-first]', box).forEach((b) => b.onclick = async () => { await api(`/used-photos/${b.dataset.first}/first`, { method: 'POST', body: {} }); const p = Number(b.dataset.first); m.photos = [p, ...m.photos.filter((x) => x !== p)]; changed = true; drawPhotos(); });
+    $$('[data-view]', box).forEach((im) => im.onclick = () => window.open(im.src, '_blank'));
+  };
+  drawPhotos();
+  const body = () => ({ ...formData(f), customer_id: picker.get() });
+  $('#uf-save', md.el).onclick = async () => {
+    try {
+      if (isEdit) {
+        const r = await api('/used/' + m.id, { method: 'PUT', body: body() });
+        md.close(); toast(r.hits ? `Gespeichert – passt zu ${r.hits} Suchauftrag${r.hits > 1 ? 'en' : ''}, Verkäufer ist informiert` : 'Gespeichert'); onSaved && onSaved();
+      } else {
+        const r = await api('/used', { method: 'POST', body: body() });
+        md.close(); toast(r.hits ? `Aufgenommen – passt zu ${r.hits} Suchauftrag${r.hits > 1 ? 'en' : ''}, Verkäufer ist informiert` : 'Aufgenommen – jetzt Fotos hinzufügen'); onSaved && onSaved();
+        openUsedForm(r.id, onSaved);
+      }
+    } catch (e) { fail(e); }
+  };
+  if (!isEdit) return;
+  $('#uf-del', md.el).onclick = async () => {
+    if (!(await confirmBox(`${esc(m.title)} mit allen Fotos aus dem Lager löschen?`))) return;
+    try { await api('/used/' + m.id, { method: 'DELETE' }); md.close(); toast('Gelöscht'); onSaved && onSaved(); } catch (e) { fail(e); }
+  };
+  const sb = $('#uf-sale', md.el); if (sb) sb.onclick = async () => { md.close(); openSaleForm(await api('/sales/' + m.sale_id), onSaved); };
+  const sold = $('#uf-sold', md.el);
+  if (sold) sold.onclick = async () => {
+    const x = body();
+    try { await api('/used/' + m.id, { method: 'PUT', body: x }); } catch (e) { fail(e); return; }
+    md.close();
+    openSaleForm({ kind: 'verkauf', used_id: m.id, category: x.category, brand: x.brand, model: x.model, serial: x.serial, year: x.year, condition: x.condition, purchase_id: m.purchase_id, purchase_price: parseEur(x.purchase_price), sale_price: parseEur(x.asking_price), notes: `Gebrauchtmaschine Nr. G-${m.id}` }, onSaved);
+  };
+}
+
+async function openSearchForm(s, onSaved) {
+  const isEdit = !!s.id;
+  const meta = state.meta || await loadMeta();
+  const cats = [...new Set(['Hoftrac', 'Radlader', 'Teleskoplader', 'Kompakttraktor', ...MACHINE_CATS, ...meta.categories])];
+  const md = modal({
+    title: isEdit ? 'Suchauftrag' : 'Suchauftrag anlegen', wide: true,
+    body: `<form id="sf2"><div class="form-grid">
+      <div class="sec full">Kunde</div>
+      <div class="field full"><label>Kunde aus dem CRM</label><div id="s2-cust"></div></div>
+      <div class="field s2-free"><label>… oder Name <span class="muted">(noch nicht im CRM)</span></label><input type="text" name="kunde" value="${esc(s.customer_id ? '' : s.kunde || '')}"></div>
+      <div class="field s2-free"><label>Telefon</label><input type="tel" name="telefon" value="${esc(s.telefon || '')}"></div>
+      <div class="sec full">Gesucht wird</div>
+      <div class="field"><label>Maschinenart</label><input type="text" name="category" list="s2-cats" value="${esc(s.category || '')}" placeholder="z. B. Hoftrac"><datalist id="s2-cats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></div>
+      <div class="field"><label>Marke <span class="muted">(leer = egal)</span></label><input type="text" name="brand" list="s2-brands" value="${esc(s.brand || '')}"><datalist id="s2-brands">${[...new Set([...PROJ_BRANDS, ...meta.brands])].map((c) => `<option value="${esc(c)}">`).join('')}</datalist></div>
+      <div class="field"><label>Modell <span class="muted">(leer = egal)</span></label><input type="text" name="model" value="${esc(s.model || '')}" placeholder="z. B. 1390"></div>
+      <div class="field"><label>Preis bis netto</label><div class="money"><input type="text" inputmode="decimal" name="max_price" value="${eur2(s.max_price)}" placeholder="egal"><span>€</span></div></div>
+      <div class="field"><label>Baujahr ab</label><input type="number" name="min_year" min="1950" max="2100" value="${s.min_year || ''}" placeholder="egal"></div>
+      <div class="field"><label>Betriebsstunden bis</label><input type="number" name="max_hours" min="0" value="${s.max_hours ?? ''}" placeholder="egal"></div>
+      <div class="field"><label>Verkäufer <span class="muted">(wird bei Treffer informiert)</span></label><select name="user_id">${userOptions(s.user_id || state.me.id)}</select></div>
+      <div class="field"><label>Status</label><select name="status"><option value="offen">Offen</option><option value="erledigt" ${s.status === 'erledigt' ? 'selected' : ''}>Erledigt</option></select></div>
+      <div class="field full"><label>Notizen</label><textarea name="notes" rows="2" placeholder="z. B. braucht Kabine, Finanzierung gewünscht">${esc(s.notes || '')}</textarea></div>
+      <div class="full" id="s2-matches"></div>
+    </div></form>`,
+    foot: `<span class="left">${isEdit ? `<button class="btn danger" id="s2-del">${icon('trash')} Löschen</button>` : ''}</span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="s2-save">Speichern</button>`,
+  });
+  const f = $('#sf2', md.el);
+  const free = () => $$('.s2-free', md.el).forEach((el) => { el.style.display = picker.get() ? 'none' : ''; });
+  const picker = customerPicker($('#s2-cust', md.el), s.customer_id ? { id: s.customer_id, name: s.kunde_name || 'Kunde' } : null, free);
+  free();
+  const showMatches = (list) => {
+    $('#s2-matches', md.el).innerHTML = list && list.length
+      ? `<div class="callout ok">${icon('check')} <b>Passt schon jetzt:</b> ${list.map((m) => `<div style="margin-top:6px"><a href="#/gebrauchte/${m.id}">${esc(m.title)}</a> <span class="muted small">${esc(usedSpecs(m))}</span> ${m.asking_price != null ? '· <b>' + eur(m.asking_price) + '</b>' : ''}</div>`).join('')}</div>`
+      : (isEdit ? '<div class="callout info small">Im Moment passt keine Maschine aus dem Lager. Sobald eine passende reinkommt, bekommt der Verkäufer eine Aufgabe.</div>' : '');
+  };
+  showMatches(s.matches);
+  $('#s2-save', md.el).onclick = async () => {
+    const b = { ...formData(f), customer_id: picker.get() };
+    try {
+      const r = isEdit ? await api('/searches/' + s.id, { method: 'PUT', body: b }) : await api('/searches', { method: 'POST', body: b });
+      if (!isEdit && r.matches.length) { md.close(); onSaved && onSaved(); openSearchForm(r, onSaved); toast(`Gespeichert – ${r.matches.length} passende Maschine${r.matches.length > 1 ? 'n' : ''} im Lager!`); return; }
+      md.close(); toast(isEdit ? 'Gespeichert' : 'Suchauftrag gespeichert – du wirst informiert, sobald etwas Passendes reinkommt'); onSaved && onSaved();
+    } catch (e) { fail(e); }
+  };
+  if (isEdit) $('#s2-del', md.el).onclick = async () => {
+    if (!(await confirmBox('Suchauftrag löschen?'))) return;
+    try { await api('/searches/' + s.id, { method: 'DELETE' }); md.close(); toast('Gelöscht'); onSaved && onSaved(); } catch (e) { fail(e); }
+  };
+}
+
 // ======================= Verkäufe & Einkäufe =======================
 const SALE_COND = { neu: 'Neu', gebraucht: 'Gebraucht', vorfuehr: 'Vorführmaschine' };
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -1706,6 +1910,7 @@ async function openSaleForm(s, onSaved) {
     if (!f.reportValidity()) return;
     const body = { ...formData(f), kind, customer_id: picker.get() };
     if (body.add_machine === undefined) body.add_machine = false;
+    if (s.used_id && !isEdit) body.used_id = s.used_id;
     try {
       if (isEdit) await api('/sales/' + s.id, { method: 'PUT', body });
       else await api('/sales', { method: 'POST', body });
@@ -2122,7 +2327,7 @@ async function viewSettings(main) {
   main.innerHTML = `
     <div class="page-head"><h1>Einstellungen</h1>${state.version && state.version.commit !== 'dev' ? `<span class="muted small" title="${esc(state.version.subject)}">Version ${esc(state.version.commit)} vom ${esc(state.version.date)} · automatische Updates aktiv</span>` : ''}</div>
     <div style="display:grid;gap:18px;max-width:900px">
-      <div class="card show-m-only"><div class="card-body more-links"><a class="btn" href="#/karte">${icon('map')} Karte</a><a class="btn" href="#/verkaeufe">${icon('euro')} Verkäufe</a></div></div>
+      <div class="card show-m-only"><div class="card-body more-links"><a class="btn" href="#/karte">${icon('map')} Karte</a><a class="btn" href="#/verkaeufe">${icon('euro')} Verkäufe</a><a class="btn" href="#/gebrauchte">${icon('tractor')} Gebrauchtmaschinen</a></div></div>
       <div class="card"><div class="card-head"><h2>${icon('cal', 'lg')} Kalender mit Outlook &amp; iPhone verbinden</h2></div><div class="card-body">
         <p style="margin-top:0">Ihre Termine und Aufgaben aus dem CRM erscheinen als abonnierter Kalender in Outlook und auf dem iPhone (inkl. Kundengeburtstagen). Neue Einträge werden automatisch übernommen – Outlook aktualisiert je nach Version alle paar Stunden, das iPhone je nach Einstellung alle 15 Minuten bis stündlich.</p>
         <div class="field"><label>Ihre persönliche Abo-Adresse</label><code class="url" id="ical-url">${esc(ical.https)}</code></div>
