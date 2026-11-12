@@ -179,6 +179,50 @@ function toast(msg, err = false) {
 const fail = (e) => toast(e.message || String(e), true);
 
 const openModals = new Set();
+// ---------- Preise netto / brutto ----------
+// Gespeichert wird immer netto. Im Formular kann netto oder brutto eingegeben werden (Auswahl wird gemerkt);
+// das jeweils andere steht klein darunter. Das Feld liefert für den restlichen Code immer den Nettowert.
+const VAT = 0.19;
+const brutto = (n) => (n == null ? null : Math.round(n * (1 + VAT) * 100) / 100);
+const vatMode = () => { try { return localStorage.getItem('vatMode') === 'b' ? 'b' : 'n'; } catch { return 'n'; } };
+const NATIVE_VALUE = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+function vatFields(root) {
+  const inputs = $$('.money input', root);
+  if (!inputs.length) return;
+  let mode = vatMode();
+  const conv = (raw, toNet) => { const n = parseEur(raw); if (n == null) return raw; return eur2(Math.round((toNet ? n / (1 + VAT) : n * (1 + VAT)) * 100) / 100); };
+  const items = inputs.map((el) => {
+    const raw = { get: () => NATIVE_VALUE.get.call(el), set: (v) => NATIVE_VALUE.set.call(el, v) };
+    const hint = document.createElement('div'); hint.className = 'vat-hint';
+    el.closest('.money').after(hint);
+    const lbl = el.closest('.field') && $('label', el.closest('.field'));
+    if (lbl) { lbl.innerHTML = lbl.innerHTML.replace(/ netto\b/, ''); lbl.insertAdjacentHTML('beforeend', ' <span class="vat-tg"><button type="button" data-vat="n">netto</button><button type="button" data-vat="b">brutto</button></span>'); }
+    const upd = () => {
+      const n = parseEur(raw.get());
+      hint.textContent = n == null ? '' : mode === 'b' ? `= ${eur2(Math.round(n / (1 + VAT) * 100) / 100)} € netto` : `= ${eur2(n * (1 + VAT))} € brutto (inkl. 19 % MwSt.)`;
+    };
+    Object.defineProperty(el, 'value', {
+      configurable: true,
+      get: () => (mode === 'b' ? conv(raw.get(), true) : raw.get()),
+      set: (v) => { raw.set(mode === 'b' ? conv(v, false) : v); upd(); },
+    });
+    el.addEventListener('input', upd);
+    if (mode === 'b') raw.set(conv(raw.get(), false));
+    return { el, raw, upd };
+  });
+  const paint = () => { $$('.vat-tg button', root).forEach((b) => b.classList.toggle('on', b.dataset.vat === mode)); items.forEach((i) => i.upd()); };
+  $$('.vat-tg button', root).forEach((b) => b.onclick = (e) => {
+    e.preventDefault();
+    const m = b.dataset.vat; if (m === mode) return;
+    items.forEach((i) => i.raw.set(conv(i.raw.get(), m === 'n')));
+    mode = m; try { localStorage.setItem('vatMode', m); } catch { /* egal */ }
+    paint();
+  });
+  paint();
+}
+/** kleiner Brutto-Zusatz für Listen */
+const bruttoHint = (n) => (n == null ? '' : `<div class="muted small nowrap">${eur(brutto(n))} brutto</div>`);
+
 function modal({ title, body, foot = '', wide = false, onClose }) {
   const root = $('#modal-root');
   const bg = document.createElement('div');
@@ -187,6 +231,7 @@ function modal({ title, body, foot = '', wide = false, onClose }) {
     <div class="modal-head"><h2>${title}</h2><button class="btn ghost icon" data-close title="Schließen">${icon('x')}</button></div>
     <div class="modal-body">${body}</div>${foot ? `<div class="modal-foot">${foot}</div>` : ''}</div>`;
   root.appendChild(bg);
+  vatFields(bg);
   const close = () => { if (!bg.isConnected) return; bg.remove(); document.removeEventListener('keydown', onKey); openModals.delete(close); onClose && onClose(); };
   openModals.add(close);
   const onKey = (e) => { if (e.key === 'Escape' && root.lastElementChild === bg) close(); };
@@ -1333,7 +1378,7 @@ function projRow(p, { showCust = true } = {}) {
     <td>${showCust ? `<div class="show-m-only"><b>${esc(p.kunde_name)}</b> <span class="muted small">${esc(p.ort_name || '')}</span></div>` : ''}<span class="brand-tag">${esc(p.brand)}</span> ${esc([p.typ, p.modell].filter(Boolean).join(' '))}<div class="muted small">${esc(p.ausstattung)}</div><div class="show-m-only"><span class="pstat ${PROJ_STATUS_CLS[p.status] || ''}">${esc(p.status)}</span> ${p.preis ? eur0(p.preis) : ''}</div></td>
     <td class="hide-m"><span class="pstat ${PROJ_STATUS_CLS[p.status] || ''}">${esc(p.status)}</span><div class="muted small">${Math.round(p.prob * 100)} %${p.finanzierung && p.finanzierung !== 'Offen' ? ' · ' + esc(p.finanzierung) : ''}</div></td>
     <td class="nowrap">${ampel(p)} ${deDate(p.faellig)}<div class="muted small hide-m wrap">${esc(p.naechster)}</div></td>
-    <td class="num nowrap hide-m">${eur0(p.preis)}${p.preis ? `<div class="muted small">gew. ${eur0(p.preis * p.prob)}</div>` : ''}</td>
+    <td class="num nowrap hide-m">${eur0(p.preis)}${p.preis ? `<div class="muted small">${eur0(brutto(p.preis))} brutto</div><div class="muted small">gew. ${eur0(p.preis * p.prob)}</div>` : ''}</td>
     <td class="num nowrap hide-m">${eur0(p.inz_wert)}<div class="muted small wrap">${esc(p.inzahlung)}</div></td>
     <td class="nowrap hide-l">${deDate(p.abschluss)}</td>
     <td class="nowrap hide-l">${deDate(p.liefer)}</td>
@@ -1474,7 +1519,7 @@ async function openProjectForm(p, onSaved) {
     const u = p.used; const s = p.search; const closed = ['Gewonnen', 'Verloren'].includes(p.status);
     const others = s ? s.matches.filter((m) => !u || m.id !== u.id) : [];
     let h = '<div class="sec">Maschine aus dem Lager</div>';
-    if (u) h += `<div class="callout ok used-link">${thumb(u.photo_id)}<div class="grow"><b><a href="#/gebrauchte/${u.id}">${esc(u.title)}</a></b> <span class="muted small">Nr. G-${u.id}</span><div class="small">${esc(usedSpecs(u))}${u.asking_price != null ? ' · Wunschpreis <b>' + eur(u.asking_price) + '</b>' : ''}${u.purchase_price != null ? ' · EK ' + eur(u.purchase_price) : ''}</div>
+    if (u) h += `<div class="callout ok used-link">${thumb(u.photo_id)}<div class="grow"><b><a href="#/gebrauchte/${u.id}">${esc(u.title)}</a></b> <span class="muted small">Nr. G-${u.id}</span><div class="small">${esc(usedSpecs(u))}${u.asking_price != null ? ' · Wunschpreis <b>' + eur(u.asking_price) + '</b> netto (' + eur(brutto(u.asking_price)) + ' brutto)' : ''}${u.purchase_price != null ? ' · EK ' + eur(u.purchase_price) : ''}</div>
       <div class="small muted">${u.status === 'verkauft' ? 'Verkauft.' : 'Wird bei „Gewonnen“ automatisch als verkauft markiert, der EK kommt in den Verkauf.'}</div></div>${u.status !== 'verkauft' ? '<button type="button" class="btn sm" id="pf-unlink">Lösen</button>' : ''}</div>`;
     if (s) {
       h += `<div class="callout ${others.length ? 'ok' : 'info'}">${icon('search')} <b>Suchauftrag:</b> ${esc(s.title)}${s.max_price != null ? ' bis ' + eur(s.max_price) : ''} ${s.status === 'erledigt' ? '<span class="chip">erledigt</span>' : '<span class="chip">offen</span>'} <button type="button" class="btn sm" id="pf-sopen" style="margin-left:6px">Öffnen</button>`
@@ -1652,7 +1697,7 @@ async function viewUsed(main, sub) {
         <td class="hide-m small">${esc(m.location || '')}<div class="muted">${esc(m.origin || '')}${m.customer_name ? ' · ' + esc(m.customer_name) : ''}</div></td>
         <td class="num nowrap"><span class="pct ${standCls(m.days)}">${m.days ?? '–'} Tage</span><div class="muted small">seit ${deDate(m.in_date)}</div></td>
         <td class="num hide-m">${m.purchase_price != null ? eur(m.purchase_price) : '<span class="muted small">–</span>'}</td>
-        <td class="num"><b>${m.asking_price != null ? eur(m.asking_price) : '<span class="muted small">offen</span>'}</b></td>
+        <td class="num"><b>${m.asking_price != null ? eur(m.asking_price) : '<span class="muted small">offen</span>'}</b>${bruttoHint(m.asking_price)}</td>
         <td class="num hide-m">${m.margin != null ? eur(m.margin) : ''}</td>
         <td><span class="ustat ${m.status}">${USED_STATUS[m.status]}</span>${m.status === 'verkauft' && m.sold_date ? `<div class="muted small">${deDate(m.sold_date)}</div>` : ''}</td></tr>`).join('')}</tbody></table>`
       : `<div class="empty">${st.q || st.status || st.category ? 'Keine Maschinen für diesen Filter.' : 'Noch keine Maschinen im Lager. Einkäufe und Inzahlungnahmen landen automatisch hier – oder mit „Maschine aufnehmen“ selbst anlegen.'}</div>`;
@@ -1893,7 +1938,7 @@ async function viewSales(main) {
             <td class="hide-m">${r.customer_id ? `<a href="#/kunden/${r.customer_id}" onclick="event.stopPropagation()">${esc(r.customer_name || 'Kunde')}</a>` : esc(r.party || '')}${r.customer_city ? `<div class="muted small">${esc(r.customer_city)}</div>` : ''}</td>
             ${adm ? `<td class="hide-m">${r.user_name ? `${avatar(r.user_name, r.user_id, 'xs')} ${esc(r.user_name)}` : ''}</td>` : ''}
             <td class="num nowrap hide-m">${eur(r.purchase_price)}${r.extra_costs ? `<div class="muted small">+ ${eur(r.extra_costs)} NK</div>` : ''}</td>
-            <td class="num nowrap hide-m">${r.kind === 'verkauf' ? eur(r.sale_price) : ''}</td>
+            <td class="num nowrap hide-m">${r.kind === 'verkauf' ? eur(r.sale_price) + bruttoHint(r.sale_price) : ''}</td>
             <td class="num nowrap">${r.kind === 'verkauf' ? (r.margin != null ? `<b>${eur(r.margin)}</b><span class="show-m-only muted small">von ${eur(r.sale_price)}</span> <span class="pct ${pctCls(r.margin_pct)}">${String(r.margin_pct).replace('.', ',')} %</span>` : '<span class="muted small">EK fehlt</span>') : ''}</td>
           </tr>`).join('')}</tbody>
           ${st.tab !== 'lager' && st.tab !== 'einkauf' && s.sales ? `<tfoot><tr><td class="hide-m"></td><td><b>Summe Verkäufe</b></td><td class="hide-m" colspan="${adm ? 3 : 2}"></td><td class="num nowrap hide-m"><b>${eur(s.revenue)}</b></td><td class="num nowrap"><b>${eur(s.margin)}</b></td></tr></tfoot>` : ''}</table></div>`
