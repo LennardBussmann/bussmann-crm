@@ -431,6 +431,8 @@ const U = require('../lib/util');
     pub = await (await fetch(base + '/boerse/machines.json')).json();
     const pm = pub.machines.find((x) => x.id === um1.id);
     assert.ok(pm); assert.equal(pm.price_net, null); assert.equal(pm.photos.length, 1);
+    assert.match(pm.photos[0], new RegExp(`/boerse/foto/${ph.id}\\.jpg$`)); assert.equal(pm.status, 'verfuegbar'); assert.equal(pm.angebotsnr, `G-${um1.id}`);
+    assert.equal((await fetch(pm.photos[0].replace(/^https?:\/\/[^/]+/, base))).status, 200);
     const pubRaw = JSON.stringify(pub);
     assert.ok(!pubRaw.includes('GEHEIM') && !pubRaw.includes('18000') && !pubRaw.includes('purchase') && !pubRaw.includes('Halle 9'));
     await call('a', 'PUT', `/api/used/${um1.id}`, { show_price: true });
