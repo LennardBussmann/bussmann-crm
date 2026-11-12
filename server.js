@@ -7,6 +7,7 @@ const express = require('express');
 const { get, all, run, tx, getSetting, setSetting, DATA_DIR } = require('./lib/db');
 const U = require('./lib/util');
 const L = require('./lib/logic');
+const Series = require('./lib/series');
 const { sendMail, mailEnabled, appUrl } = require('./lib/mail');
 const { buildFeed } = require('./lib/ical');
 const importer = require('./lib/importer');
@@ -1651,10 +1652,10 @@ app.delete('/api/entries/:id', auth, (req, res) => {
 });
 
 // ---------- Aufgaben ----------
-const TASK_SQL = `SELECT t.*, a.name assignee, a.color assignee_color, cb.name creator, db.name done_by_name, ${PARTICIPANT_COLS},
+const TASK_SQL = `SELECT t.*, ts.freq repeat, ts.until repeat_until, a.name assignee, a.color assignee_color, cb.name creator, db.name done_by_name, ${PARTICIPANT_COLS},
   (SELECT COUNT(*) FROM task_files tf WHERE tf.task_id=t.id) file_count,
   c.first_name c_first, c.last_name c_last, c.company c_company, c.city c_city, c.mobile c_mobile, c.phone c_phone, c.street c_street, c.zip c_zip
-  FROM tasks t LEFT JOIN users a ON a.id=t.assigned_to LEFT JOIN users cb ON cb.id=t.created_by LEFT JOIN users db ON db.id=t.done_by LEFT JOIN customers c ON c.id=t.customer_id`;
+  FROM tasks t LEFT JOIN task_series ts ON ts.id=t.series_id LEFT JOIN users a ON a.id=t.assigned_to LEFT JOIN users cb ON cb.id=t.created_by LEFT JOIN users db ON db.id=t.done_by LEFT JOIN customers c ON c.id=t.customer_id`;
 
 app.get('/api/tasks', auth, (req, res) => {
   const where = []; const p = [];
@@ -1680,8 +1681,13 @@ app.get('/api/tasks/:id', auth, (req, res) => {
 app.post('/api/tasks', auth, wrap(async (req, res) => {
   const { t, error } = cleanTask(req.body || {}, null);
   if (error) return bad(res, error);
-  const id = insertTask(t, req.user.id, null);
-  if (t.customer_id) L.systemEntry(t.customer_id, req.user.id, `${U.TASK_KINDS[t.kind]} angelegt: ${t.title}`);
+  const b = req.body || {};
+  const id = tx(() => {
+    const id = insertTask(t, req.user.id, null);
+    if (Series.REPEATS[b.repeat]) Series.start(id, b.repeat, b.repeat_until);
+    return id;
+  });
+  if (t.customer_id) L.systemEntry(t.customer_id, req.user.id, `${U.TASK_KINDS[t.kind]} angelegt: ${t.title}${Series.REPEATS[b.repeat] ? ` (${Series.REPEATS[b.repeat].toLowerCase()})` : ''}`);
   await L.notifyAssignment(id, req.user.id);
   await L.notifyParticipants(id, req.user.id, all('SELECT user_id FROM task_participants WHERE task_id=?', id).map((r) => r.user_id));
   res.json({ id });
@@ -1703,6 +1709,16 @@ app.put('/api/tasks/:id', auth, wrap(async (req, res) => {
     await L.notifyAssignment(old.id, req.user.id);
   }
   await L.notifyParticipants(old.id, req.user.id, added);
+  // Wiederholung: „nur dieser“ ändert nichts weiter; „dieser und folgende“ legt die Serie ab hier neu an
+  const b = req.body || {};
+  const following = b.scope === 'following' && old.series_id;
+  if (following || (!old.series_id && Series.REPEATS[b.repeat])) {
+    tx(() => {
+      const now = get('SELECT * FROM tasks WHERE id=?', old.id);
+      if (following) { Series.cutFrom({ ...now, due_date: old.due_date }, false); run('UPDATE tasks SET series_id=NULL WHERE id=?', old.id); }
+      if (Series.REPEATS[b.repeat]) Series.start(old.id, b.repeat, b.repeat_until);
+    });
+  }
   res.json({ ok: true });
 }));
 app.post('/api/tasks/:id/done', auth, (req, res) => {
@@ -1739,6 +1755,11 @@ app.delete('/api/tasks/:id', auth, (req, res) => {
   if (t.created_by && t.created_by !== req.user.id && t.assigned_to !== req.user.id && req.user.role !== 'admin'
     && !get('SELECT 1 FROM task_participants WHERE task_id=? AND user_id=?', t.id, req.user.id)) return res.status(403).json({ error: 'Keine Berechtigung' });
   const tfiles = all('SELECT stored_name FROM task_files WHERE task_id=?', t.id);
+  if (req.query.scope === 'following' && t.series_id) {
+    // diesen und alle folgenden offenen Termine der Serie löschen
+    for (const f of all(`SELECT f.stored_name FROM task_files f JOIN tasks x ON x.id=f.task_id WHERE x.series_id=? AND x.status='open' AND x.due_date>?`, t.series_id, t.due_date)) tfiles.push(f);
+    tx(() => Series.cutFrom(t, true));
+  }
   run('DELETE FROM tasks WHERE id=?', t.id);
   for (const f of tfiles) fs.rm(path.join(DATA_DIR, 'files', f.stored_name), () => {});
   if (t.machine_id && t.status === 'open') run('UPDATE machines SET next_service=NULL WHERE id=?', t.machine_id);

@@ -534,6 +534,7 @@ async function openTask(id, reload) {
     body: `<div class="kv">
       <span class="k">Art</span><span>${TASK_KINDS[t.kind]}${t.auto_visit ? ' <span class="chip">automatisch aus Besuchsintervall</span>' : ''}</span>
       <span class="k">Fällig</span><span class="${dueClass(t) === 'over' ? 'chip red' : ''}">${WD_LONG[parseISO(t.due_date).getDay()]}, ${deDate(t.due_date)}${t.due_time ? `, ${t.due_time} Uhr (${t.duration_min} Min.)` : ' (ganztägig)'}</span>
+      ${t.repeat ? `<span class="k">Wiederholung</span><span>${icon('repeat')} ${esc(repeatText(t))}</span>` : ''}
       <span class="k">Status</span><span>${done ? `<span class="chip ok">Erledigt</span> ${esc(t.done_by_name || '')} am ${deDateTime(t.done_at)}` : '<span class="chip warn">Offen</span>'}</span>
       ${cust ? `<span class="k">Kunde</span><span><a href="#/kunden/${t.customer_id}" data-close>${esc(cust)}</a>${t.c_city ? ` · ${esc(t.c_city)}` : ''}</span>` : ''}
       ${t.c_mobile || t.c_phone ? `<span class="k">Telefon</span><span>${[t.c_mobile, t.c_phone].filter(Boolean).map((n) => `<a href="${telHref(n)}">${esc(n)}</a>`).join(' · ')}</span>` : ''}
@@ -572,7 +573,11 @@ async function openTask(id, reload) {
     if (!(await confirmBox('Diese Datei löschen?'))) return;
     try { await api('/task-files/' + b.dataset.fdel, { method: 'DELETE' }); toast('Gelöscht'); refresh(); } catch (err) { fail(err); }
   });
-  $('#t-del', m.el).onclick = async () => { if (await confirmBox('Diese Aufgabe wirklich löschen?')) { try { await api('/tasks/' + id, { method: 'DELETE' }); toast('Aufgabe gelöscht'); after(); } catch (e) { fail(e); } } };
+  $('#t-del', m.el).onclick = async () => {
+    const sc = t.series_id ? await seriesChoice('gelöscht') : ((await confirmBox('Diese Aufgabe wirklich löschen?')) ? 'one' : null);
+    if (!sc) return;
+    try { await api('/tasks/' + id + (sc === 'following' ? '?scope=following' : ''), { method: 'DELETE' }); toast(sc === 'following' ? 'Termin und alle folgenden gelöscht' : 'Aufgabe gelöscht'); after(); } catch (e) { fail(e); }
+  };
   $('#t-edit', m.el).onclick = () => { m.close(); openTaskForm(t, reload); };
   if (done) $('#t-reopen', m.el).onclick = async () => { await api(`/tasks/${id}/reopen`, { method: 'POST', body: {} }); toast('Wieder geöffnet'); after(); };
   else $('#t-done', m.el).onclick = () => { m.close(); completeTask(id, reload || route); };
@@ -608,12 +613,27 @@ function taskFields(t = {}, prefix = '') {
     <div class="field"><label>Dauer</label><select name="${prefix}duration_min">${[15, 30, 45, 60, 90, 120, 180, 240, 480].map((n) => `<option value="${n}" ${Number(t.duration_min || 60) === n ? 'selected' : ''}>${n < 60 ? n + ' Min.' : n / 60 + ' Std.'}</option>`).join('')}</select></div>
     <div class="field"><label>Ort / Treffpunkt</label><input type="text" name="${prefix}location" value="${esc(t.location || '')}" placeholder="leer = Kundenadresse"></div>
     <div class="field full"><label>Weitere Teilnehmer <span class="muted">(werden eingeladen, bekommen eine E-Mail und sehen den Termin in ihrem Kalender)</span></label>${participantsHtml(partIds(t))}</div>
+    ${prefix ? '' : `<div class="field"><label>${icon('repeat')} Wiederholen</label><select name="repeat"><option value="">Nicht wiederholen</option>${Object.entries(REPEATS).map(([k, v]) => `<option value="${k}" ${t.repeat === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+    <div class="field" id="tf-until"><label>Wiederholen bis <span class="muted">(leer = ohne Ende)</span></label><input type="date" name="repeat_until" value="${esc(t.repeat_until || '')}"></div>`}
     ${prefix ? '' : '<div class="full" id="tf-abs"></div>'}
     <div class="field full"><label>Beschreibung</label><textarea name="${prefix}description" rows="3">${esc(t.description || '')}</textarea></div>
     ${prefix ? '' : `<div class="field full"><label>Bilder / Dateien</label><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${fileInputHtml('id="tf-files"')}<span class="muted small" id="tf-files-out"></span></div></div>`}
     <div class="field full"><label class="check"><input type="checkbox" name="${prefix}remind_day_before" ${t.remind_day_before === 0 ? '' : 'checked'}> Einen Tag vorher erinnern (in der App${state.mailEnabled ? ', per E-Mail' : ''} und im Kalender-Abo)</label></div>
   </div>`;
 }
+
+const REPEATS = { daily: 'Täglich', weekdays: 'Werktags (Mo–Fr)', weekly: 'Wöchentlich', biweekly: 'Alle 2 Wochen', monthly: 'Monatlich', quarterly: 'Vierteljährlich', halfyearly: 'Halbjährlich', yearly: 'Jährlich' };
+/** Bei Serien fragen: nur dieser Termin oder auch alle folgenden? -> 'one' | 'following' | null */
+function seriesChoice(what) {
+  return new Promise((resolve) => {
+    let v = null;
+    const m = modal({ title: 'Wiederkehrender Termin', body: `<p>Dieser Termin gehört zu einer Serie. Was soll ${what} werden?</p>`,
+      foot: `<span class="left"></span><button class="btn" data-close>Abbrechen</button><button class="btn" id="sc-one">Nur dieser Termin</button><button class="btn primary" id="sc-all">Dieser und alle folgenden</button>`, onClose: () => resolve(v) });
+    $('#sc-one', m.el).onclick = () => { v = 'one'; m.close(); };
+    $('#sc-all', m.el).onclick = () => { v = 'following'; m.close(); };
+  });
+}
+const repeatText = (t) => (t.repeat ? `${REPEATS[t.repeat]}${t.repeat_until ? ' bis ' + deDate(t.repeat_until) : ''}` : '');
 
 function openTaskForm(t = {}, reload, presetCustomer) {
   const isEdit = !!t.id;
@@ -626,11 +646,19 @@ function openTaskForm(t = {}, reload, presetCustomer) {
   const picker = customerPicker($('#tf-cust', m.el), initCust);
   pickedList($('#tf-files', m.el), $('#tf-files-out', m.el));
   bindParticipants(m.el, $('[name=assigned_to]', m.el));
+  const rep = $('[name=repeat]', m.el);
+  const repUpd = () => { $('#tf-until', m.el).style.display = rep.value ? '' : 'none'; };
+  rep.onchange = repUpd; repUpd();
   bindAbsenceWarning(m.el, () => [Number($('[name=assigned_to]', m.el).value), ...readParticipants(m.el)], $('[name=due_date]', m.el), $('[name=due_time]', m.el), $('#tf-abs', m.el));
   $('#tf-save', m.el).onclick = async () => {
     const f = $('#tf', m.el);
     if (!f.reportValidity()) return;
     const body = { ...formData(f), customer_id: picker.get(), participants: readParticipants(m.el) };
+    if (isEdit && t.series_id) {
+      const sc = (body.repeat || '') !== (t.repeat || '') || (body.repeat_until || '') !== (t.repeat_until || '') ? 'following' : await seriesChoice('geändert');
+      if (!sc) return;
+      body.scope = sc;
+    }
     try {
       let taskId = t.id;
       if (isEdit) await api('/tasks/' + t.id, { method: 'PUT', body });
@@ -641,7 +669,7 @@ function openTaskForm(t = {}, reload, presetCustomer) {
       const invited = body.participants.filter((id) => id !== state.me.id && !partIds(t).includes(id)).length;
       const other = (Number(body.assigned_to) !== state.me.id ? ` – ${state.users.find((u) => u.id === Number(body.assigned_to))?.name} wurde benachrichtigt` : '')
         + (invited ? ` – ${invited} Teilnehmer eingeladen` : '');
-      toast((isEdit ? 'Gespeichert' : 'Aufgabe angelegt') + other);
+      toast((isEdit ? 'Gespeichert' : body.repeat ? `Serie angelegt (${REPEATS[body.repeat].toLowerCase()})` : 'Aufgabe angelegt') + other);
       reload ? reload() : route();
     } catch (e) { fail(e); }
   };
@@ -721,7 +749,7 @@ function evHtml(t, showWho) {
   const cust = taskCust(t);
   return `<div class="ev k-${t.kind} ${t.status === 'done' ? 'done' : ''} ${over ? 'overdue' : ''}" data-ev="${t.id}" title="${esc(TASK_KINDS[t.kind] + ': ' + t.title + (cust ? ' – ' + cust : ''))}">
     <div class="t">${t.due_time ? t.due_time : 'ganztägig'} · ${TASK_KINDS[t.kind]}</div>
-    <div class="ttl">${esc(t.title)}</div>
+    <div class="ttl">${t.series_id ? `<span class="rep" title="wiederkehrend">${icon('repeat')}</span>` : ''}${esc(t.title)}</div>
     ${showWho && t.assignee ? `<div class="who">${esc(t.assignee)}${t.participant_names ? ' + ' + esc(t.participant_names) : ''}</div>` : (t.participant_names ? `<div class="who">${icon('users')} +${partIds(t).length}</div>` : '')}
   </div>`;
 }

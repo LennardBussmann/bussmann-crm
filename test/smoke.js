@@ -591,6 +591,40 @@ const U = require('../lib/util');
     const kFeed = await (await fetch(base + new URL((await call('k', 'GET', '/api/me/ical')).https).pathname)).text();
     assert.ok(kFeed.includes('SUMMARY:Urlaub: Mallorca'));
 
+    // Wiederholungen
+    {
+      const S = require('../lib/series');
+      assert.equal(S.addMonths('2027-01-31', 1), '2027-02-28');
+      assert.equal(S.nextDate('2027-01-31', 'monthly', '2027-02-28'), '2027-03-31');
+      assert.equal(S.nextDate('2027-01-01', 'weekdays', '2027-01-01'), '2027-01-04'); // Fr -> Mo
+      const d0 = U.addDays(U.today(), 2);
+      const ser = await call('a', 'POST', '/api/tasks', { title: 'Teambesprechung', kind: 'termin', due_date: d0, due_time: '08:00', repeat: 'weekly', repeat_until: U.addDays(d0, 28), participants: [kollege.id] });
+      const occ = () => call('a', 'GET', `/api/tasks?scope=all&q=Teambesprechung`);
+      let list = await occ();
+      assert.equal(list.length, 5); assert.deepEqual(list.map((t) => t.due_date), [0, 7, 14, 21, 28].map((n) => U.addDays(d0, n)));
+      assert.ok(list.every((t) => t.series_id && t.repeat === 'weekly' && t.due_time === '08:00'));
+      assert.ok((await call('k', 'GET', `/api/tasks/${list[3].id}`)).participant_ids.includes(String(kollege.id)));
+      // nur dieser
+      await call('a', 'PUT', `/api/tasks/${list[1].id}`, { title: 'Teambesprechung (verschoben)', due_time: '10:00', scope: 'one' });
+      list = await occ(); assert.equal(list.length, 5); assert.equal(list.filter((t) => t.due_time === '10:00').length, 1);
+      // dieser und folgende: andere Uhrzeit
+      await call('a', 'PUT', `/api/tasks/${list[2].id}`, { due_time: '09:00', scope: 'following', repeat: 'weekly', repeat_until: U.addDays(d0, 28) });
+      list = await occ(); assert.equal(list.length, 5);
+      assert.deepEqual(list.map((t) => t.due_time), ['08:00', '10:00', '09:00', '09:00', '09:00']);
+      // ab dem 4. löschen
+      await call('a', 'DELETE', `/api/tasks/${list[3].id}?scope=following`);
+      list = await occ(); assert.equal(list.length, 3);
+      // ohne Ende: wird bis zum Horizont angelegt und nicht doppelt nachgelegt
+      const y = await call('a', 'POST', '/api/tasks', { title: 'Winterdienst-Aktion', kind: 'aufgabe', due_date: U.addDays(U.today(), 1), repeat: 'yearly' });
+      const yl = (await call('a', 'GET', '/api/tasks?scope=all&q=Winterdienst-Aktion')).length;
+      assert.ok(yl >= 2 && yl <= 3);
+      assert.equal(S.extendAll(), 0);
+      await call('a', 'DELETE', `/api/tasks/${y.id}?scope=following`);
+      assert.equal((await call('a', 'GET', '/api/tasks?scope=all&q=Winterdienst-Aktion')).length, 0);
+      for (const t of await occ()) await call('a', 'DELETE', `/api/tasks/${t.id}`);
+      assert.ok(ser.id);
+    }
+
     // iCal
     const ical = await call('a', 'GET', '/api/me/ical');
     const feed = await (await fetch(base + new URL(ical.https).pathname)).text();
