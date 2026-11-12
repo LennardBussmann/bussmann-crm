@@ -364,7 +364,7 @@ function renderSetup() {
 
 // ======================= Grundgerüst =======================
 function renderShell() {
-  const nav = [['start', 'home', 'Übersicht'], ['kunden', 'users', 'Kunden'], ['karte', 'map', 'Karte'], ['aufgaben', 'tasks', 'Aufgaben'], ['kalender', 'cal', 'Kalender'], ['projekte', 'target', 'Projekte'], ['gebrauchte', 'tractor', 'Gebrauchte'], ['verkaeufe', 'euro', 'Verkäufe'], ['einstellungen', 'gear', 'Einstellungen']];
+  const nav = [['start', 'home', 'Übersicht'], ['kunden', 'users', 'Kunden'], ['karte', 'map', 'Karte'], ['aufgaben', 'tasks', 'Aufgaben'], ['kalender', 'cal', 'Kalender'], ['projekte', 'target', 'Projekte'], ['gebrauchte', 'tractor', 'Maschinen'], ['verkaeufe', 'euro', 'Verkäufe'], ['einstellungen', 'gear', 'Einstellungen']];
   $('#app').innerHTML = `<div class="shell">
     <header class="topbar">
       <a class="brand" href="#/"><img src="img/logo.png" alt="Bussmann Land- & Gartentechnik"></a>
@@ -1473,7 +1473,7 @@ async function openProjectForm(p, onSaved) {
     const box = $('#pf-used', md.el); if (!box) return;
     const u = p.used; const s = p.search; const closed = ['Gewonnen', 'Verloren'].includes(p.status);
     const others = s ? s.matches.filter((m) => !u || m.id !== u.id) : [];
-    let h = '<div class="sec">Gebrauchtmaschine</div>';
+    let h = '<div class="sec">Maschine aus dem Lager</div>';
     if (u) h += `<div class="callout ok used-link">${thumb(u.photo_id)}<div class="grow"><b><a href="#/gebrauchte/${u.id}">${esc(u.title)}</a></b> <span class="muted small">Nr. G-${u.id}</span><div class="small">${esc(usedSpecs(u))}${u.asking_price != null ? ' · Wunschpreis <b>' + eur(u.asking_price) + '</b>' : ''}${u.purchase_price != null ? ' · EK ' + eur(u.purchase_price) : ''}</div>
       <div class="small muted">${u.status === 'verkauft' ? 'Verkauft.' : 'Wird bei „Gewonnen“ automatisch als verkauft markiert, der EK kommt in den Verkauf.'}</div></div>${u.status !== 'verkauft' ? '<button type="button" class="btn sm" id="pf-unlink">Lösen</button>' : ''}</div>`;
     if (s) {
@@ -1482,7 +1482,7 @@ async function openProjectForm(p, onSaved) {
           : (s.status === 'offen' && !u ? '<div class="small" style="margin-top:4px">Im Moment passt nichts aus dem Lager – sobald etwas reinkommt, bekommt der Verkäufer eine Aufgabe.</div>' : ''))
         + (s.status === 'offen' ? `<div class="small" style="margin-top:8px">Im Internet suchen: ${portalLinks(s)}</div>` : '') + '</div>';
     } else if (!u && !closed) {
-      h += `<div class="callout info">${icon('info')} Sucht der Kunde eine Gebrauchte? <button type="button" class="btn sm primary" id="pf-snew" style="margin-left:6px">${icon('search')} Gebraucht suchen</button><div class="small muted" style="margin-top:4px">Legt einen Suchauftrag mit Maschinenart, Marke und Preis aus diesem Projekt an und zeigt passende Maschinen aus dem Lager.</div></div>`;
+      h += `<div class="callout info">${icon('info')} Noch keine Maschine aus dem Lager ausgewählt. <button type="button" class="btn sm primary" id="pf-snew" style="margin-left:6px">${icon('search')} Im Lager suchen</button><div class="small muted" style="margin-top:4px">Legt einen Suchauftrag mit Maschinenart, Marke und Preis aus diesem Projekt an und zeigt passende Maschinen aus dem Lager.</div></div>`;
     } else if (!u) h = '';
     box.innerHTML = h;
     const take = (m) => { f.used_id.value = m ? m.id : ''; p.used = m; if (m && !parseEur(f.preis.value) && m.asking_price != null) f.preis.value = eur2(m.asking_price); drawUsed(); if (m) toast('Verknüpft – zum Übernehmen „Speichern“'); };
@@ -1598,10 +1598,11 @@ async function openProjectForm(p, onSaved) {
   };
 }
 
-// ======================= Gebrauchtmaschinen & Suchaufträge =======================
+// ======================= Maschinen-Lager (neu & gebraucht) & Suchaufträge =======================
+const USED_COND = { neu: 'Neu', vorfuehr: 'Vorführer', gebraucht: 'Gebraucht' };
 const USED_STATUS = { verfuegbar: 'Verfügbar', reserviert: 'Reserviert', verkauft: 'Verkauft' };
 const standCls = (d) => (d == null ? '' : d > 180 ? 'neg' : d > 90 ? 'mid' : 'pos');
-const usedSpecs = (m) => [m.year ? 'Bj. ' + m.year : '', m.hours != null ? Number(m.hours).toLocaleString('de-DE') + ' h' : '', m.condition === 'vorfuehr' ? 'Vorführer' : ''].filter(Boolean).join(' · ');
+const usedSpecs = (m) => [m.condition === 'neu' ? 'Neu' : m.condition === 'vorfuehr' ? 'Vorführer' : '', m.year ? 'Bj. ' + m.year : '', m.hours != null && !(m.condition === 'neu' && !m.hours) ? Number(m.hours).toLocaleString('de-DE') + ' h' : ''].filter(Boolean).join(' · ');
 /** Such-Knöpfe für Online-Börsen (öffnen in neuem Tab, Suchbegriffe vorausgefüllt) */
 function portalLinks(s) {
   const words = [s.brand, s.model, s.category].map((x) => String(x || '').trim()).filter(Boolean);
@@ -1621,15 +1622,15 @@ const thumb = (pid, cls = 'thumb') => (pid ? `<img class="${cls}" src="/api/used
 async function viewUsed(main, sub) {
   const tab = sub === 'suche' ? 'suche' : 'lager';
   const openId = /^\d+$/.test(sub || '') ? Number(sub) : null;
-  const st = { status: '', category: '', q: '', sstatus: '' };
+  const st = { status: '', category: '', cond: sessionStorage.getItem('uCond') || '', q: '', sstatus: '' };
   main.innerHTML = `
-    <div class="page-head"><h1>Gebrauchtmaschinen</h1><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="u-search">${icon('search')} Suchauftrag anlegen</button><button class="btn primary" id="u-new">${icon('plus')} Maschine aufnehmen</button></div></div>
+    <div class="page-head"><h1>Maschinen</h1><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="u-search">${icon('search')} Suchauftrag anlegen</button><button class="btn primary" id="u-new">${icon('plus')} Maschine aufnehmen</button></div></div>
     <div class="tabs"><a href="#/gebrauchte" class="${tab === 'lager' ? 'on' : ''}">${icon('tractor')} Lager</a><a href="#/gebrauchte/suche" class="${tab === 'suche' ? 'on' : ''}">${icon('search')} Suchaufträge <span class="badge grey" id="u-scount"></span></a></div>
     <div id="u-kpis" class="kpis kpis-6"></div>
     <div class="toolbar" id="u-bar"></div>
     <div class="card"><div class="table-wrap" id="u-list"></div></div>`;
   const loadLager = async () => {
-    const d = await api('/used?' + new URLSearchParams({ status: st.status, category: st.category, q: st.q }));
+    const d = await api('/used?' + new URLSearchParams({ status: st.status, category: st.category, condition: st.cond, q: st.q }));
     const s = d.stats;
     $('#u-scount').textContent = s.searches || '';
     $('#u-kpis').innerHTML = [['Im Lager', s.count], ['Lagerwert (EK)', eur(s.ek) || '0 €'], ['Angebotswert', eur(s.vk) || '0 €'], ['Ø Standzeit', s.avg_days == null ? '–' : s.avg_days + ' Tage'], ['Länger als 180 Tage', s.old, s.old > 0], ['Offene Suchaufträge', s.searches]]
@@ -1637,10 +1638,12 @@ async function viewUsed(main, sub) {
     if (!$('#u-status')) {
       $('#u-bar').innerHTML = `<div class="grow"><span class="ico">${icon('search')}</span><input type="search" id="u-q" placeholder="Suchen: Marke, Modell, Ausstattung, Seriennr. …"></div>
         <select id="u-status" style="width:auto"><option value="">Verfügbar &amp; reserviert</option><option value="verfuegbar">Nur verfügbar</option><option value="reserviert">Nur reserviert</option><option value="verkauft">Verkauft</option><option value="*">Alle</option></select>
+        <select id="u-cond" style="width:auto"><option value="">Neu &amp; gebraucht</option>${Object.entries(USED_COND).map(([k, v]) => `<option value="${k}" ${st.cond === k ? 'selected' : ''}>Nur ${v === 'Neu' ? 'Neumaschinen' : v === 'Vorführer' ? 'Vorführer' : 'Gebrauchte'}</option>`).join('')}</select>
         <select id="u-cat" style="width:auto"><option value="">Alle Maschinenarten</option>${d.categories.map((c) => `<option>${esc(c)}</option>`).join('')}</select>`;
       $('#u-q').oninput = debounce((e) => { st.q = e.target.value; loadLager(); });
       $('#u-status').onchange = (e) => { st.status = e.target.value; loadLager(); };
       $('#u-cat').onchange = (e) => { st.category = e.target.value; loadLager(); };
+      $('#u-cond').onchange = (e) => { st.cond = e.target.value; try { sessionStorage.setItem('uCond', st.cond); } catch { /* egal */ } loadLager(); };
     }
     $('#u-list').innerHTML = d.rows.length ? `<table class="list used"><thead><tr><th></th><th>Maschine</th><th class="hide-m">Standort / Herkunft</th><th class="num">Standzeit</th><th class="num hide-m">EK</th><th class="num">Wunschpreis</th><th class="num hide-m">Spanne</th><th>Status</th></tr></thead><tbody>
       ${d.rows.map((m) => `<tr data-uid="${m.id}" class="click"><td style="width:76px">${thumb(m.photo_id)}</td>
@@ -1652,7 +1655,7 @@ async function viewUsed(main, sub) {
         <td class="num"><b>${m.asking_price != null ? eur(m.asking_price) : '<span class="muted small">offen</span>'}</b></td>
         <td class="num hide-m">${m.margin != null ? eur(m.margin) : ''}</td>
         <td><span class="ustat ${m.status}">${USED_STATUS[m.status]}</span>${m.status === 'verkauft' && m.sold_date ? `<div class="muted small">${deDate(m.sold_date)}</div>` : ''}</td></tr>`).join('')}</tbody></table>`
-      : `<div class="empty">${st.q || st.status || st.category ? 'Keine Maschinen für diesen Filter.' : 'Noch keine Gebrauchtmaschinen im Lager. Gebrauchte Einkäufe und Inzahlungnahmen landen automatisch hier – oder mit „Maschine aufnehmen“ selbst anlegen.'}</div>`;
+      : `<div class="empty">${st.q || st.status || st.category ? 'Keine Maschinen für diesen Filter.' : 'Noch keine Maschinen im Lager. Einkäufe und Inzahlungnahmen landen automatisch hier – oder mit „Maschine aufnehmen“ selbst anlegen.'}</div>`;
     $$('#u-list tr[data-uid]').forEach((tr) => tr.onclick = () => openUsedForm(Number(tr.dataset.uid), loadLager));
   };
   const loadSuche = async () => {
@@ -1682,13 +1685,13 @@ async function viewUsed(main, sub) {
 }
 
 async function openUsedForm(id, onSaved) {
-  const m = id ? await api('/used/' + id) : { status: 'verfuegbar', in_date: todayISO(), condition: 'gebraucht', user_id: state.me.id, photos: [], searches: [] };
+  const m = id ? await api('/used/' + id) : { status: 'verfuegbar', in_date: todayISO(), condition: (() => { try { return sessionStorage.getItem('uCond'); } catch { return ''; } })() || 'gebraucht', user_id: state.me.id, photos: [], searches: [] };
   const isEdit = !!m.id;
   const meta = state.meta || await loadMeta();
   const cats = [...new Set([...MACHINE_CATS, 'Hoftrac', 'Radlader', 'Teleskoplader', 'Kompakttraktor', ...meta.categories])];
   let changed = false;
   const md = modal({
-    title: isEdit ? `${esc(m.title)} <span class="muted small">Nr. G-${m.id}</span>` : 'Gebrauchtmaschine aufnehmen', wide: true,
+    title: isEdit ? `${esc(m.title)} <span class="muted small">Nr. G-${m.id}</span>` : 'Maschine aufnehmen', wide: true,
     onClose: () => { if (changed && onSaved) onSaved(); },
     body: `<form id="uf"><div class="form-grid">
       ${isEdit ? `<div class="full"><div class="photo-strip" id="uf-photos"></div></div>` : ''}
@@ -1700,7 +1703,7 @@ async function openUsedForm(id, onSaved) {
       <div class="field"><label>Seriennummer</label><input type="text" name="serial" value="${esc(m.serial || '')}"></div>
       <div class="field"><label>Baujahr</label><input type="number" name="year" min="1950" max="2100" value="${esc(m.year || '')}"></div>
       <div class="field"><label>Betriebsstunden</label><input type="number" name="hours" min="0" value="${m.hours ?? ''}"></div>
-      <div class="field"><label>Zustand</label><select name="condition"><option value="gebraucht">Gebraucht</option><option value="vorfuehr" ${m.condition === 'vorfuehr' ? 'selected' : ''}>Vorführmaschine</option></select></div>
+      <div class="field"><label>Zustand</label><select name="condition">${Object.entries({ neu: 'Neumaschine', vorfuehr: 'Vorführmaschine', gebraucht: 'Gebraucht' }).map(([k, v]) => `<option value="${k}" ${m.condition === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
       <div class="field"><label>Standort</label><input type="text" name="location" value="${esc(m.location || '')}" placeholder="z. B. Halle 2, Hof"></div>
       <div class="field full"><label>Ausstattung <span class="muted">(eine Zeile oder mit Komma getrennt – erscheint als Liste im Exposé)</span></label><textarea name="equipment" rows="2" placeholder="Kabine, Schaufel 1,0 m, Palettengabel, 3. Steuerkreis">${esc(m.equipment || '')}</textarea></div>
       <div class="field full"><label>Beschreibung für das Exposé</label><textarea name="description" rows="3" placeholder="z. B. Sehr gepflegt, neue Reifen, Service frisch gemacht">${esc(m.description || '')}</textarea></div>
@@ -1769,7 +1772,7 @@ async function openUsedForm(id, onSaved) {
     const x = body();
     try { await api('/used/' + m.id, { method: 'PUT', body: x }); } catch (e) { fail(e); return; }
     md.close();
-    openSaleForm({ kind: 'verkauf', used_id: m.id, category: x.category, brand: x.brand, model: x.model, serial: x.serial, year: x.year, condition: x.condition, purchase_id: m.purchase_id, purchase_price: parseEur(x.purchase_price), sale_price: parseEur(x.asking_price), notes: `Gebrauchtmaschine Nr. G-${m.id}` }, onSaved);
+    openSaleForm({ kind: 'verkauf', used_id: m.id, category: x.category, brand: x.brand, model: x.model, serial: x.serial, year: x.year, condition: x.condition, purchase_id: m.purchase_id, purchase_price: parseEur(x.purchase_price), sale_price: parseEur(x.asking_price), notes: `Lagermaschine Nr. G-${m.id}` }, onSaved);
   };
 }
 
@@ -2392,7 +2395,7 @@ async function viewSettings(main) {
   main.innerHTML = `
     <div class="page-head"><h1>Einstellungen</h1>${state.version && state.version.commit !== 'dev' ? `<span class="muted small" title="${esc(state.version.subject)}">Version ${esc(state.version.commit)} vom ${esc(state.version.date)} · automatische Updates aktiv</span>` : ''}</div>
     <div style="display:grid;gap:18px;max-width:900px">
-      <div class="card show-m-only"><div class="card-body more-links"><a class="btn" href="#/karte">${icon('map')} Karte</a><a class="btn" href="#/verkaeufe">${icon('euro')} Verkäufe</a><a class="btn" href="#/gebrauchte">${icon('tractor')} Gebrauchtmaschinen</a></div></div>
+      <div class="card show-m-only"><div class="card-body more-links"><a class="btn" href="#/karte">${icon('map')} Karte</a><a class="btn" href="#/verkaeufe">${icon('euro')} Verkäufe</a><a class="btn" href="#/gebrauchte">${icon('tractor')} Maschinen</a></div></div>
       <div class="card"><div class="card-head"><h2>${icon('cal', 'lg')} Kalender mit Outlook &amp; iPhone verbinden</h2></div><div class="card-body">
         <p style="margin-top:0">Ihre Termine und Aufgaben aus dem CRM erscheinen als abonnierter Kalender in Outlook und auf dem iPhone (inkl. Kundengeburtstagen). Neue Einträge werden automatisch übernommen – Outlook aktualisiert je nach Version alle paar Stunden, das iPhone je nach Einstellung alle 15 Minuten bis stündlich.</p>
         <div class="field"><label>Ihre persönliche Abo-Adresse</label><code class="url" id="ical-url">${esc(ical.https)}</code></div>

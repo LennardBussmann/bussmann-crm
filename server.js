@@ -617,7 +617,7 @@ function syncProjectSale(id, oldStatus, userId) {
     const base = { date, user_id: p.user_id, customer_id: p.customer_id, party: p.customer_id ? '' : [p.kunde, p.ort].filter(Boolean).join(', '), condition: um ? um.condition : 'neu', category: p.typ || (um && um.category) || null, brand: p.brand || null, model: p.modell || null, serial: um ? um.serial : null, year: um ? um.year : null, extra_costs: 0, purchase_id: null };
     const ins = (s) => Number(run(`INSERT INTO sales(${SALE_FIELDS.join(',')}, project_id, created_by) VALUES(${SALE_FIELDS.map(() => '?').join(',')}, ?, ?)`, ...SALE_FIELDS.map((f) => s[f] ?? null), id, userId).lastInsertRowid);
     const sid = ins({ ...base, kind: 'verkauf', purchase_price: um ? um.purchase_price : null, purchase_id: um ? um.purchase_id : null, sale_price: p.preis ?? 0,
-      notes: [`Aus Verkaufsprojekt Nr. ${p.id}`, um ? `Gebrauchtmaschine Nr. G-${um.id}` : '', p.ausstattung ? `Ausstattung: ${p.ausstattung}` : '', p.finanzierung !== 'Offen' ? `Finanzierung: ${p.finanzierung}` : '', p.inzahlung ? `Inzahlungnahme: ${p.inzahlung}${p.inz_wert != null ? ' (' + p.inz_wert.toLocaleString('de-DE') + ' €)' : ''}` : ''].filter(Boolean).join('\n') });
+      notes: [`Aus Verkaufsprojekt Nr. ${p.id}`, um ? `Lagermaschine Nr. G-${um.id}` : '', p.ausstattung ? `Ausstattung: ${p.ausstattung}` : '', p.finanzierung !== 'Offen' ? `Finanzierung: ${p.finanzierung}` : '', p.inzahlung ? `Inzahlungnahme: ${p.inzahlung}${p.inz_wert != null ? ' (' + p.inz_wert.toLocaleString('de-DE') + ' €)' : ''}` : ''].filter(Boolean).join('\n') });
     const mid = machineFromSale({ ...base, kind: 'verkauf' }, userId);
     if (mid) run('UPDATE sales SET machine_id=? WHERE id=?', mid, sid);
     if (um) run(`UPDATE used_machines SET status='verkauft', sold_date=?, sale_id=?, updated_at=datetime('now','localtime') WHERE id=?`, date, sid, um.id);
@@ -1071,7 +1071,7 @@ app.post('/api/sales', auth, (req, res) => {
     const r = run(`INSERT INTO sales(${SALE_FIELDS.join(',')}, created_by) VALUES(${SALE_FIELDS.map(() => '?').join(',')}, ?)`, ...SALE_FIELDS.map((f) => s[f]), req.user.id);
     const id = Number(r.lastInsertRowid);
     if (req.body.add_machine !== false) { const mid = machineFromSale(s, req.user.id); if (mid) run('UPDATE sales SET machine_id=? WHERE id=?', mid, id); }
-    if (s.kind === 'einkauf' && s.condition !== 'neu' && req.body.to_stock !== false) usedFromPurchase(id, req.user.id);
+    if (s.kind === 'einkauf' && req.body.to_stock !== false) usedFromPurchase(id, req.user.id);
     if (s.kind === 'verkauf') {
       const u = req.body.used_id ? get('SELECT * FROM used_machines WHERE id=?', req.body.used_id) : s.purchase_id ? get('SELECT * FROM used_machines WHERE purchase_id=?', s.purchase_id) : null;
       if (u && u.status !== 'verkauft') run(`UPDATE used_machines SET status='verkauft', sold_date=?, sale_id=?, updated_at=datetime('now','localtime') WHERE id=?`, s.date, id, u.id);
@@ -1097,6 +1097,8 @@ app.delete('/api/sales/:id', auth, (req, res) => {
   const old = get('SELECT * FROM sales WHERE id=?', req.params.id);
   if (!old || !canSale(req.user, old)) return res.status(404).json({ error: 'Nicht gefunden' });
   run(`UPDATE used_machines SET status='verfuegbar', sold_date=NULL, sale_id=NULL WHERE sale_id=?`, old.id); // Verkauf gelöscht -> wieder im Lager
+  // Einkauf gelöscht -> automatisch angelegte Lagermaschine mit weg (nur wenn unverkauft und ohne Fotos)
+  if (old.kind === 'einkauf') run(`DELETE FROM used_machines WHERE purchase_id=? AND status<>'verkauft' AND NOT EXISTS (SELECT 1 FROM used_photos f WHERE f.used_id=used_machines.id)`, old.id);
   run('DELETE FROM sales WHERE id=?', old.id); // Maschine beim Kunden bleibt bestehen
   res.json({ ok: true });
 });
@@ -1119,7 +1121,7 @@ function cleanUsed(b, user) {
   const m = {
     category: U.str(b.category, 60) || null, brand: U.str(b.brand, 60) || null, model: U.str(b.model, 100) || null, serial: U.str(b.serial, 100) || null,
     year: intOrNull(b.year, 1900, 2200), hours: intOrNull(b.hours, 0, 1000000),
-    condition: b.condition === 'vorfuehr' ? 'vorfuehr' : 'gebraucht',
+    condition: ['neu', 'vorfuehr'].includes(b.condition) ? b.condition : 'gebraucht',
     equipment: U.str(b.equipment, 3000) || '', description: U.str(b.description, 5000) || '',
     purchase_price: money(b.purchase_price), asking_price: money(b.asking_price), location: U.str(b.location, 100) || '',
     status: USED_STATUS[b.status] ? b.status : 'verfuegbar',
@@ -1132,13 +1134,13 @@ function cleanUsed(b, user) {
   if (!m.category && !m.brand && !m.model) return { error: 'Bitte mindestens Art, Marke oder Modell angeben' };
   return { m };
 }
-/** Gebrauchter Einkauf (z. B. Inzahlungnahme) kommt automatisch ins Gebrauchtmaschinen-Lager */
+/** Einkauf (neu, Vorführer, gebraucht, Inzahlungnahme) kommt automatisch ins Maschinen-Lager */
 function usedFromPurchase(saleId, userId) {
   const s = get('SELECT * FROM sales WHERE id=?', saleId);
   if (!s || s.kind !== 'einkauf' || get('SELECT 1 FROM used_machines WHERE purchase_id=?', s.id)) return null;
-  const origin = s.customer_id ? 'Inzahlungnahme / Ankauf' : (s.party ? 'Ankauf von ' + s.party : 'Ankauf');
+  const origin = s.condition === 'neu' ? (s.party ? 'Neu von ' + s.party : 'Neumaschine') : s.customer_id ? 'Inzahlungnahme / Ankauf' : (s.party ? 'Ankauf von ' + s.party : 'Ankauf');
   const id = Number(run(`INSERT INTO used_machines(category, brand, model, serial, year, condition, purchase_price, in_date, origin, customer_id, purchase_id, user_id, notes, created_by)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, s.category, s.brand, s.model, s.serial, s.year, s.condition === 'vorfuehr' ? 'vorfuehr' : 'gebraucht', s.purchase_price, s.date, origin, s.customer_id, s.id, s.user_id, s.notes || '', userId).lastInsertRowid);
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, s.category, s.brand, s.model, s.serial, s.year, ['neu', 'vorfuehr'].includes(s.condition) ? s.condition : 'gebraucht', s.purchase_price, s.date, origin, s.customer_id, s.id, s.user_id, s.notes || '', userId).lastInsertRowid);
   checkUsedHits(id, userId);
   return id;
 }
@@ -1171,7 +1173,7 @@ function checkUsedHits(usedId, actorId) {
     const text = `Passende Maschine für ${s.kunde_name}: ${m.title}${m.year ? ' Bj. ' + m.year : ''}${m.asking_price != null ? ' für ' + m.asking_price.toLocaleString('de-DE') + ' €' : ''} (Suchauftrag: ${searchTitle(s)})`;
     const tid = Number(run(`INSERT INTO tasks(customer_id, kind, title, description, due_date, assigned_to, created_by) VALUES(?,?,?,?,?,?,?)`,
       s.customer_id, 'anruf', `Kunde informieren: ${m.title} passt zum Suchauftrag`.slice(0, 200),
-      `${text}\n${s.kunde_tel ? 'Telefon: ' + s.kunde_tel + '\n' : ''}Maschine im CRM: Gebrauchte → Nr. ${m.id}`, U.today(), who, actorId || null).lastInsertRowid);
+      `${text}\n${s.kunde_tel ? 'Telefon: ' + s.kunde_tel + '\n' : ''}Maschine im CRM: Maschinen → Nr. G-${m.id}`, U.today(), who, actorId || null).lastInsertRowid);
     L.notify(who, text, tid, s.customer_id, `#/gebrauchte/${m.id}`);
   }
   return n;
@@ -1180,6 +1182,7 @@ function usedQuery(q) {
   const where = []; const p = [];
   if (!q.status) where.push("m.status<>'verkauft'"); else if (q.status !== '*') { where.push('m.status=?'); p.push(q.status); }
   if (q.category) { where.push('m.category=?'); p.push(q.category); }
+  if (['neu', 'vorfuehr', 'gebraucht'].includes(q.condition)) { where.push('m.condition=?'); p.push(q.condition); }
   if (q.q) { where.push("(m.brand || ' ' || COALESCE(m.model,'') || ' ' || COALESCE(m.category,'') || ' ' || COALESCE(m.serial,'') || ' ' || m.equipment || ' ' || m.location) LIKE ?"); p.push(`%${q.q}%`); }
   const rows = all(`${USED_SQL} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY m.in_date, m.id`, ...p).map(usedCalc);
   const open = all(`${SEARCH_SQL} WHERE s.status='offen'`);
@@ -1274,7 +1277,7 @@ app.get('/api/used/:id/expose.html', auth, (req, res) => {
   const e0 = (n) => Math.round(n).toLocaleString('de-DE') + ' €';
   const showPrice = req.query.price !== '0';
   const seller = get('SELECT name, email FROM users WHERE id=?', m.user_id);
-  const specs = [['Hersteller', m.brand], ['Modell', m.model], ['Maschinenart', m.category], ['Baujahr', m.year], ['Betriebsstunden', m.hours != null ? m.hours.toLocaleString('de-DE') + ' h' : ''], ['Zustand', m.condition === 'vorfuehr' ? 'Vorführmaschine' : 'Gebraucht'], ['Seriennummer', req.query.serial === '1' ? m.serial : ''], ['Standort', m.location || 'Havixbeck']].filter(([, v]) => v);
+  const specs = [['Hersteller', m.brand], ['Modell', m.model], ['Maschinenart', m.category], ['Baujahr', m.year], ['Betriebsstunden', m.hours != null ? m.hours.toLocaleString('de-DE') + ' h' : ''], ['Zustand', { neu: 'Neu', vorfuehr: 'Vorführmaschine' }[m.condition] || 'Gebraucht'], ['Seriennummer', req.query.serial === '1' ? m.serial : ''], ['Standort', m.location || 'Havixbeck']].filter(([, v]) => v);
   const eq = String(m.equipment || '').split(/\n|,(?=\s)(?![^(]*\))/).map((s) => s.trim()).filter(Boolean);
   res.set('Content-Security-Policy', "default-src 'self'; img-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'unsafe-inline'");
   res.type('html').send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><title>Exposé ${h(m.title)}</title>
@@ -1362,7 +1365,7 @@ app.post('/api/searches/:id/project', auth, (req, res) => {
     customer_id: s.customer_id, kunde: s.customer_id ? '' : s.kunde, telefon: s.kunde_tel || '', user_id: s.user_id || req.user.id,
     brand: (m && m.brand) || s.brand || 'Gebraucht', typ: (m && m.category) || s.category, modell: (m && m.model) || s.model,
     ausstattung: m ? [m.year ? 'Bj. ' + m.year : '', m.hours != null ? m.hours + ' h' : '', String(m.equipment || '').replace(/\n/g, ', ')].filter(Boolean).join(', ').slice(0, 500) : '',
-    status: 'Bedarf geklärt', preis: m ? m.asking_price : s.max_price, naechster: m ? 'Kunde über passende Gebrauchte informieren' : 'Passende Maschine anbieten', faellig: U.addDays(U.today(), 1),
+    status: 'Bedarf geklärt', preis: m ? m.asking_price : s.max_price, naechster: m ? 'Kunde über passende Maschine informieren' : 'Passende Maschine anbieten', faellig: U.addDays(U.today(), 1),
     notizen: [`Aus Suchauftrag: ${searchTitle(s)}`, s.notes].filter(Boolean).join('\n'), used_id: m ? m.id : null,
   }, req.user);
   if (error) return bad(res, error);
