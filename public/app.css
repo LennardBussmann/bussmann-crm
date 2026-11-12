@@ -546,3 +546,21 @@ tr.click { cursor: pointer; }
 .ti-excel { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
 
 .ev .ttl .rep svg { width: 11px; height: 11px; vertical-align: -1px; margin-right: 3px; opacity: .7; }
+
+/* Saison-Aktionen */
+.camp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+.camp { padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
+.camp.off { opacity: .6; }
+.camp.running { border-color: var(--ok, #2e7d32); }
+.camp-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+.camp-head h3 { margin: 2px 0 0; font-size: 17px; }
+.camp-when { font-size: 12px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+.camp-bar { display: grid; grid-template-columns: repeat(12, 1fr); gap: 2px; margin: 4px 0; }
+.camp-bar span { text-align: center; font-size: 10px; font-weight: 700; padding: 3px 0; border-radius: 3px; background: var(--surface-2); color: var(--muted); }
+.camp-bar span.on { background: var(--red); color: #fff; }
+.camp-bar span.now { outline: 2px solid var(--text, #222); outline-offset: -2px; }
+.camp-desc { white-space: pre-wrap; }
+.camp-count { margin-top: 4px; font-size: 13px; }
+.camp-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.chk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 2px 12px; }
+.camp .chip { white-space: normal; max-width: 100%; }

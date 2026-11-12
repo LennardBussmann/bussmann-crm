@@ -332,7 +332,7 @@ function route() {
   const main = $('#main');
   main.innerHTML = '<div class="empty">Lädt …</div>';
   window.scrollTo(0, 0);
-  const views = { '': viewDashboard, start: viewDashboard, kunden: p1 ? () => viewCustomer(Number(p1)) : viewCustomers, aufgaben: viewTasks, kalender: viewCalendar, karte: viewMap, verkaeufe: viewSales, projekte: viewProjects, gebrauchte: () => viewUsed(main, p1), einstellungen: viewSettings };
+  const views = { '': viewDashboard, start: viewDashboard, kunden: p1 ? () => viewCustomer(Number(p1)) : viewCustomers, aufgaben: viewTasks, kalender: viewCalendar, karte: viewMap, verkaeufe: viewSales, projekte: viewProjects, gebrauchte: () => viewUsed(main, p1), aktionen: viewCampaigns, einstellungen: viewSettings };
   (views[p0] || viewDashboard)(main).catch(fail);
   if (p0 === 'aufgaben' && p1) openTask(Number(p1));
 }
@@ -409,7 +409,7 @@ function renderSetup() {
 
 // ======================= Grundgerüst =======================
 function renderShell() {
-  const nav = [['start', 'home', 'Übersicht'], ['kunden', 'users', 'Kunden'], ['karte', 'map', 'Karte'], ['aufgaben', 'tasks', 'Aufgaben'], ['kalender', 'cal', 'Kalender'], ['projekte', 'target', 'Projekte'], ['gebrauchte', 'tractor', 'Maschinen'], ['verkaeufe', 'euro', 'Verkäufe'], ['einstellungen', 'gear', 'Einstellungen']];
+  const nav = [['start', 'home', 'Übersicht'], ['kunden', 'users', 'Kunden'], ['karte', 'map', 'Karte'], ['aufgaben', 'tasks', 'Aufgaben'], ['kalender', 'cal', 'Kalender'], ['projekte', 'target', 'Projekte'], ['gebrauchte', 'tractor', 'Maschinen'], ['aktionen', 'bell', 'Aktionen'], ['verkaeufe', 'euro', 'Verkäufe'], ['einstellungen', 'gear', 'Einstellungen']];
   $('#app').innerHTML = `<div class="shell">
     <header class="topbar">
       <a class="brand" href="#/"><img src="img/logo.png" alt="Bussmann Land- & Gartentechnik"></a>
@@ -429,7 +429,7 @@ function renderShell() {
     <aside class="sidebar"><nav class="nav">${nav.map(([r, i, l]) => `<a href="#/${r === 'start' ? '' : r}" data-r="${r}">${icon(i, 'lg')}${l}</a>`).join('')}</nav>
       <div class="foot">Bussmann Land- &amp; Gartentechnik<br>Wenn Sie Qualität und Service schätzen!</div></aside>
     <main class="main" id="main"></main>
-    <nav class="mobile-nav">${nav.filter(([r]) => !['karte', 'verkaeufe', 'gebrauchte'].includes(r)).map(([r, i, l]) => `<a href="#/${r === 'start' ? '' : r}" data-r="${r}">${icon(i, 'lg')}${l === 'Einstellungen' ? 'Mehr' : l}</a>`).join('')}</nav>
+    <nav class="mobile-nav">${nav.filter(([r]) => !['karte', 'verkaeufe', 'gebrauchte', 'aktionen'].includes(r)).map(([r, i, l]) => `<a href="#/${r === 'start' ? '' : r}" data-r="${r}">${icon(i, 'lg')}${l === 'Einstellungen' ? 'Mehr' : l}</a>`).join('')}</nav>
   </div>`;
   $('#logout').onclick = async () => { await api('/logout', { method: 'POST', body: {} }); state.me = null; location.hash = ''; renderLogin(); };
   $('#quick-task').onclick = () => openTaskForm({});
@@ -1927,6 +1927,101 @@ async function openSearchForm(s, onSaved) {
   };
 }
 
+
+// ======================= Saison-Aktionen =======================
+const MON_SHORT = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
+const mdText = (md) => `${Number(md.slice(3))}. ${MON_SHORT[Number(md.slice(0, 2)) - 1]}`;
+/** kleiner Jahresbalken: in welchen Monaten läuft die Aktion */
+function campBar(c) {
+  const s = Number(c.start_md.slice(0, 2)); const e = Number(c.end_md.slice(0, 2));
+  const on = (m) => (s <= e ? m >= s && m <= e : m >= s || m <= e);
+  const now = new Date().getMonth() + 1;
+  return `<div class="camp-bar">${MON_SHORT.map((n, i) => `<span class="${on(i + 1) ? 'on' : ''} ${now === i + 1 ? 'now' : ''}" title="${MONTHS[i]}">${n[0]}</span>`).join('')}</div>`;
+}
+const campWho = (c) => [...c.types, ...c.tags.map((t) => '#' + t), ...(c.cats.length ? ['Besitzer: ' + c.cats.join(', ')] : [])];
+
+async function viewCampaigns(main) {
+  main.innerHTML = `<div class="page-head"><h1>Aktionen</h1><button class="btn primary" id="k-new">${icon('plus')} Neue Aktion</button></div>
+    <p class="muted" style="margin-top:-6px">Saison-Aktionen für Flyer und Kunden-Infos. Rechtzeitig vor jeder Aktion kommt automatisch eine Aufgabe „Aktion vorbereiten“ in den Kalender – jedes Jahr wieder.</p>
+    <div id="k-list"></div>`;
+  const load = async () => {
+    const d = await api('/campaigns');
+    $('#k-list').innerHTML = d.rows.length ? `<div class="camp-grid">${d.rows.map((c) => `<div class="card camp ${c.active ? '' : 'off'} ${c.running ? 'running' : ''}">
+        <div class="camp-head"><div><div class="camp-when">${c.active ? (c.running ? '<span class="chip ok">läuft gerade</span>' : `ab ${deDate(c.next_start)}`) : '<span class="chip">pausiert</span>'}</div><h3>${esc(c.name)}</h3></div>
+          <button class="btn sm" data-edit="${c.id}">${icon('edit')}</button></div>
+        ${campBar(c)}
+        <div class="small"><b>Zeitraum:</b> ${mdText(c.start_md)} – ${mdText(c.end_md)}</div>
+        ${c.active ? `<div class="small"><b>Erinnerung:</b> ${deDate(c.task && c.task.status === 'open' ? c.task.due_date : c.remind)} an ${esc(c.user_name)} (${c.lead_days % 7 === 0 ? c.lead_days / 7 + (c.lead_days === 7 ? ' Woche' : ' Wochen') : c.lead_days + ' Tage'} vorher)${c.task && c.task.status === 'open' ? ` · <a href="#/aufgaben/${c.task.id}">Aufgabe öffnen</a>` : ''}</div>` : ''}
+        <div class="small"><b>Zielgruppe:</b> ${campWho(c).length ? campWho(c).map((x) => `<span class="chip">${esc(x)}</span>`).join(' ') : 'alle Kunden'}${c.only_buyers ? ' <span class="chip ok">nur kaufende Kunden</span>' : ''}</div>
+        ${c.description ? `<div class="small muted camp-desc">${esc(c.description)}</div>` : ''}
+        <div class="camp-count"><b>${c.count}</b> Kunden · ${c.count_post} mit Adresse · ${c.count_email} mit E-Mail</div>
+        ${c.last_run ? `<div class="small muted">${icon('check')} Zuletzt verschickt am ${deDate(c.last_run.created_at.slice(0, 10))} an ${c.last_run.count} Kunden (${esc(c.last_run.user_name || '')})</div>` : ''}
+        <div class="camp-actions">
+          <a class="btn sm" href="/api/campaigns/${c.id}/customers.xlsx?channel=post">${icon('file')} Adressliste (Post)</a>
+          <a class="btn sm" href="/api/campaigns/${c.id}/customers.xlsx?channel=email">${icon('mail')} E-Mail-Liste</a>
+          <button class="btn sm primary" data-sent="${c.id}">${icon('check')} Als verschickt vermerken</button>
+        </div></div>`).join('')}</div>`
+      : '<div class="empty">Noch keine Aktionen. Mit „Neue Aktion“ legst du z. B. „Winterdienst“ mit Zeitraum und Zielgruppe an.</div>';
+    $$('[data-edit]').forEach((b) => b.onclick = () => openCampaignForm(d.rows.find((c) => c.id === Number(b.dataset.edit)), load));
+    $$('[data-sent]').forEach((b) => b.onclick = () => {
+      const c = d.rows.find((x) => x.id === Number(b.dataset.sent));
+      const m = modal({ title: 'Versand vermerken', body: `<p>Bei welchen Kunden soll vermerkt werden, dass sie die Infos zu <b>„${esc(c.name)}“</b> bekommen haben?</p>
+        <div class="field"><select id="ks-ch"><option value="post">Per Post – ${c.count_post} Kunden mit Adresse</option><option value="email">Per E-Mail – ${c.count_email} Kunden mit E-Mail</option><option value="alle">Alle ${c.count} Kunden der Zielgruppe</option></select></div>
+        <p class="small muted">Bei jedem dieser Kunden steht danach in der Historie „Aktion ${esc(c.name)}: Flyer / Info verschickt“.</p>`,
+        foot: `<span class="left"></span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="ks-ok">Vermerken</button>` });
+      $('#ks-ok', m.el).onclick = async () => {
+        try { const r = await api(`/campaigns/${c.id}/sent`, { method: 'POST', body: { channel: $('#ks-ch', m.el).value } }); m.close(); toast(`Bei ${r.count} Kunden vermerkt`); load(); } catch (e) { fail(e); }
+      };
+    });
+  };
+  $('#k-new').onclick = () => openCampaignForm({ active: true, lead_days: 28, types: [], tags: [], cats: [], start_md: '', end_md: '' }, load);
+  await load();
+}
+
+async function openCampaignForm(c, onSaved) {
+  const isEdit = !!c.id;
+  const meta = state.meta || await loadMeta();
+  const cats = [...new Set([...MACHINE_CATS, ...meta.categories])];
+  const tags = [...new Set([...meta.tags.map((t) => t.tag), ...c.tags])];
+  const mdSel = (name, md) => `<div style="display:flex;gap:6px"><select name="${name}_d" style="width:80px">${Array.from({ length: 31 }, (_, i) => `<option ${md && Number(md.slice(3)) === i + 1 ? 'selected' : ''}>${i + 1}</option>`).join('')}</select>
+    <select name="${name}_m">${MONTHS.map((n, i) => `<option value="${i + 1}" ${md && Number(md.slice(0, 2)) === i + 1 ? 'selected' : ''}>${n}</option>`).join('')}</select></div>`;
+  const checks = (name, list, sel) => `<div class="chk-grid">${list.map((v) => `<label class="check"><input type="checkbox" data-g="${name}" value="${esc(v)}" ${sel.includes(v) ? 'checked' : ''}> ${esc(v)}</label>`).join('') || '<span class="muted small">keine vorhanden</span>'}</div>`;
+  const md = modal({
+    title: isEdit ? 'Aktion bearbeiten' : 'Neue Aktion', wide: true,
+    body: `<form id="kf"><div class="form-grid">
+      <div class="field full"><label>Name <span class="req">*</span></label><input type="text" name="name" value="${esc(c.name || '')}" placeholder="z. B. Winterdienst"></div>
+      <div class="field"><label>Aktion läuft von</label>${mdSel('start', c.start_md)}</div>
+      <div class="field"><label>bis</label>${mdSel('end', c.end_md)}</div>
+      <div class="field"><label>Erinnerung</label><select name="lead_days">${[[7, '1 Woche'], [14, '2 Wochen'], [21, '3 Wochen'], [28, '4 Wochen'], [35, '5 Wochen'], [42, '6 Wochen'], [56, '8 Wochen'], [84, '12 Wochen']].map(([v, l]) => `<option value="${v}" ${Number(c.lead_days) === v ? 'selected' : ''}>${l} vorher</option>`).join('')}</select></div>
+      <div class="field"><label>Zuständig <span class="muted">(bekommt die Aufgabe)</span></label><select name="user_id">${userOptions(c.user_id || state.me.id)}</select></div>
+      <div class="field full"><label>Ideen / Inhalt des Flyers</label><textarea name="description" rows="3" placeholder="z. B. Streuer und Schneeschilde anbieten, Winterdienst-Check">${esc(c.description || '')}</textarea></div>
+      <div class="sec full">Zielgruppe <span class="muted small" style="text-transform:none;letter-spacing:0">– Kunden, auf die mindestens eins zutrifft. Nichts angekreuzt = alle Kunden.</span></div>
+      <div class="field full"><label>Kundenart</label>${checks('types', TYPES, c.types)}</div>
+      <div class="field full"><label>Kunden mit Maschine</label>${checks('cats', cats, c.cats)}</div>
+      <div class="field full"><label>Schlagwörter</label>${checks('tags', tags, c.tags)}</div>
+      <div class="field full"><label class="check"><input type="checkbox" name="only_buyers" ${c.only_buyers ? 'checked' : ''}> Nur kaufende Kunden (keine Interessenten)</label>
+        <label class="check"><input type="checkbox" name="active" ${c.active ? 'checked' : ''}> Aktion ist aktiv (jedes Jahr erinnern)</label></div>
+    </div></form>`,
+    foot: `<span class="left">${isEdit ? `<button class="btn danger" id="kf-del">${icon('trash')} Löschen</button>` : ''}</span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="kf-save">Speichern</button>`,
+  });
+  const f = $('#kf', md.el);
+  const pad = (n) => String(n).padStart(2, '0');
+  $('#kf-save', md.el).onclick = async () => {
+    const x = formData(f);
+    const body = { name: x.name, description: x.description, lead_days: Number(x.lead_days), user_id: Number(x.user_id), only_buyers: x.only_buyers, active: x.active,
+      start_md: `${pad(x.start_m)}-${pad(x.start_d)}`, end_md: `${pad(x.end_m)}-${pad(x.end_d)}` };
+    for (const g of ['types', 'cats', 'tags']) body[g] = $$(`[data-g=${g}]:checked`, md.el).map((i) => i.value);
+    try {
+      if (isEdit) await api('/campaigns/' + c.id, { method: 'PUT', body }); else await api('/campaigns', { method: 'POST', body });
+      md.close(); toast(body.active ? 'Gespeichert – die Erinnerung steht im Kalender' : 'Gespeichert'); onSaved && onSaved();
+    } catch (e) { fail(e); }
+  };
+  if (isEdit) $('#kf-del', md.el).onclick = async () => {
+    if (!(await confirmBox(`Aktion „${esc(c.name)}“ löschen?`))) return;
+    try { await api('/campaigns/' + c.id, { method: 'DELETE' }); md.close(); toast('Gelöscht'); onSaved && onSaved(); } catch (e) { fail(e); }
+  };
+}
+
 // ======================= Verkäufe & Einkäufe =======================
 const SALE_COND = { neu: 'Neu', gebraucht: 'Gebraucht', vorfuehr: 'Vorführmaschine' };
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -2494,7 +2589,7 @@ async function viewSettings(main) {
   main.innerHTML = `
     <div class="page-head"><h1>Einstellungen</h1>${state.version && state.version.commit !== 'dev' ? `<span class="muted small" title="${esc(state.version.subject)}">Version ${esc(state.version.commit)} vom ${esc(state.version.date)} · automatische Updates aktiv</span>` : ''}</div>
     <div style="display:grid;gap:18px;max-width:900px">
-      <div class="card show-m-only"><div class="card-body more-links"><a class="btn" href="#/karte">${icon('map')} Karte</a><a class="btn" href="#/verkaeufe">${icon('euro')} Verkäufe</a><a class="btn" href="#/gebrauchte">${icon('tractor')} Maschinen</a></div></div>
+      <div class="card show-m-only"><div class="card-body more-links"><a class="btn" href="#/karte">${icon('map')} Karte</a><a class="btn" href="#/verkaeufe">${icon('euro')} Verkäufe</a><a class="btn" href="#/gebrauchte">${icon('tractor')} Maschinen</a><a class="btn" href="#/aktionen">${icon('bell')} Aktionen</a></div></div>
       <div class="card"><div class="card-head"><h2>${icon('cal', 'lg')} Kalender mit Outlook &amp; iPhone verbinden</h2></div><div class="card-body">
         <p style="margin-top:0">Ihre Termine und Aufgaben aus dem CRM erscheinen als abonnierter Kalender in Outlook und auf dem iPhone (inkl. Kundengeburtstagen). Neue Einträge werden automatisch übernommen – Outlook aktualisiert je nach Version alle paar Stunden, das iPhone je nach Einstellung alle 15 Minuten bis stündlich.</p>
         <div class="field"><label>Ihre persönliche Abo-Adresse</label><code class="url" id="ical-url">${esc(ical.https)}</code></div>

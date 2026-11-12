@@ -625,6 +625,40 @@ const U = require('../lib/util');
       assert.ok(ser.id);
     }
 
+    // Saison-Aktionen
+    {
+      const K = require('../lib/campaigns');
+      let kl = (await call('a', 'GET', '/api/campaigns')).rows;
+      assert.ok(kl.length >= 5 && kl.some((c) => c.name === 'Winterdienst'));
+      K.syncTasks();
+      const wd = kl.find((c) => c.name === 'Winterdienst');
+      const t1 = (await call('a', 'GET', '/api/campaigns')).rows.find((c) => c.id === wd.id).task;
+      assert.ok(t1 && t1.status === 'open');
+      K.syncTasks(); // keine doppelte Aufgabe
+      assert.equal((await call('a', 'GET', '/api/tasks?scope=all&q=Aktion vorbereiten: Winterdienst')).length, 1);
+      // eigene Aktion: Zielgruppe Kundenart Kommune ODER Schlagwort
+      const cK = (await call('a', 'POST', '/api/customers', { company: 'Gemeinde Testdorf', last_name: 'Gemeinde Testdorf', customer_type: 'Kommune', street: 'Rathausplatz 1', zip: '48329', city: 'Havixbeck', email: 'bauhof@test.de' })).id;
+      const k = await call('a', 'POST', '/api/campaigns', { name: 'Testaktion Streuer', start_md: '10-01', end_md: '01-31', lead_days: 14, types: ['Kommune'], user_id: kollege.id });
+      kl = (await call('a', 'GET', '/api/campaigns')).rows;
+      const kr = kl.find((c) => c.id === k.id);
+      assert.ok(kr.count >= 1 && kr.count_post >= 1 && kr.count_email >= 1);
+      assert.ok(kr.next_end > kr.next_start); // über den Jahreswechsel
+      const kt = await call('k', 'GET', `/api/tasks/${kr.task.id}`);
+      assert.equal(kt.assigned_to, kollege.id); assert.match(kt.description, /Kommune/);
+      const xr = await fetch(base + `/api/campaigns/${k.id}/customers.xlsx?channel=post`, { headers: { Cookie: jars.a } });
+      assert.equal(xr.status, 200);
+      const rowsX = require('xlsx').utils.sheet_to_json(require('xlsx').read(Buffer.from(await xr.arrayBuffer())).Sheets.Adressen);
+      assert.ok(rowsX.some((r) => r.Firma === 'Gemeinde Testdorf' && r.Ort === 'Havixbeck'));
+      const sent = await call('a', 'POST', `/api/campaigns/${k.id}/sent`, { channel: 'post' });
+      assert.ok(sent.count >= 1);
+      assert.ok((await call('a', 'GET', `/api/customers/${cK}`)).entries.some((e) => /Testaktion Streuer/.test(e.text)));
+      await call('a', 'PUT', `/api/campaigns/${k.id}`, { active: false });
+      assert.equal((await call('a', 'GET', `/api/tasks?scope=all&q=Testaktion Streuer`)).length, 0);
+      await assert.rejects(call('a', 'POST', '/api/campaigns', { name: 'Ohne Datum' }), /Zeitraum/);
+      await call('a', 'DELETE', `/api/campaigns/${k.id}`);
+      await call('a', 'DELETE', `/api/customers/${cK}`);
+    }
+
     // iCal
     const ical = await call('a', 'GET', '/api/me/ical');
     const feed = await (await fetch(base + new URL(ical.https).pathname)).text();
