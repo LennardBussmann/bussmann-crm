@@ -1669,7 +1669,7 @@ async function viewUsed(main, sub) {
   const openId = /^\d+$/.test(sub || '') ? Number(sub) : null;
   const st = { status: '', category: '', cond: sessionStorage.getItem('uCond') || '', q: '', sstatus: '' };
   main.innerHTML = `
-    <div class="page-head"><h1>Maschinen</h1><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="u-search">${icon('search')} Suchauftrag anlegen</button><button class="btn primary" id="u-new">${icon('plus')} Maschine aufnehmen</button></div></div>
+    <div class="page-head"><h1>Maschinen</h1><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="u-web">${icon('link')} Homepage-Börse</button><button class="btn" id="u-search">${icon('search')} Suchauftrag anlegen</button><button class="btn primary" id="u-new">${icon('plus')} Maschine aufnehmen</button></div></div>
     <div class="tabs"><a href="#/gebrauchte" class="${tab === 'lager' ? 'on' : ''}">${icon('tractor')} Lager</a><a href="#/gebrauchte/suche" class="${tab === 'suche' ? 'on' : ''}">${icon('search')} Suchaufträge <span class="badge grey" id="u-scount"></span></a></div>
     <div id="u-kpis" class="kpis kpis-6"></div>
     <div class="toolbar" id="u-bar"></div>
@@ -1692,7 +1692,7 @@ async function viewUsed(main, sub) {
     }
     $('#u-list').innerHTML = d.rows.length ? `<table class="list used"><thead><tr><th></th><th>Maschine</th><th class="hide-m">Standort / Herkunft</th><th class="num">Standzeit</th><th class="num hide-m">EK</th><th class="num">Wunschpreis</th><th class="num hide-m">Spanne</th><th>Status</th></tr></thead><tbody>
       ${d.rows.map((m) => `<tr data-uid="${m.id}" class="click"><td style="width:76px">${thumb(m.photo_id)}</td>
-        <td><b>${esc(m.title)}</b>${m.category && (m.brand || m.model) ? ` <span class="chip">${esc(m.category)}</span>` : ''}<div class="muted small">${esc(usedSpecs(m))}${m.photo_count ? ` · ${m.photo_count} Foto${m.photo_count > 1 ? 's' : ''}` : ' · <span class="warn-t">ohne Fotos</span>'}</div>
+        <td><b>${esc(m.title)}</b>${m.category && (m.brand || m.model) ? ` <span class="chip">${esc(m.category)}</span>` : ''}${m.public ? ' <span class="chip ok" title="Steht auf der Homepage">Homepage</span>' : ''}<div class="muted small">${esc(usedSpecs(m))}${m.photo_count ? ` · ${m.photo_count} Foto${m.photo_count > 1 ? 's' : ''}` : ' · <span class="warn-t">ohne Fotos</span>'}</div>
           ${m.matches ? `<div class="small"><span class="chip ok">${icon('user')} ${m.matches} Suchauftrag${m.matches > 1 ? 'e' : ''} passt</span></div>` : ''}</td>
         <td class="hide-m small">${esc(m.location || '')}<div class="muted">${esc(m.origin || '')}${m.customer_name ? ' · ' + esc(m.customer_name) : ''}</div></td>
         <td class="num nowrap"><span class="pct ${standCls(m.days)}">${m.days ?? '–'} Tage</span><div class="muted small">seit ${deDate(m.in_date)}</div></td>
@@ -1724,6 +1724,19 @@ async function viewUsed(main, sub) {
   };
   const reload = tab === 'suche' ? loadSuche : loadLager;
   $('#u-new').onclick = () => openUsedForm(null, loadLager);
+  $('#u-web').onclick = () => {
+    const url = location.origin + '/boerse/';
+    const code = `<div id="bussmann-boerse"></div>\n<script src="${location.origin}/boerse/embed.js"></script>`;
+    const md = modal({
+      title: 'Maschinenbörse für die Homepage', wide: true,
+      body: `<p>Alle Maschinen mit Haken <b>„Auf der Homepage zeigen“</b> stehen automatisch in der öffentlichen Börse. Verkaufte verschwinden von selbst.</p>
+        <div class="field"><label>Öffentliche Seite</label><div style="display:flex;gap:8px"><input type="text" readonly value="${esc(url)}"><a class="btn" href="${esc(url)}" target="_blank" rel="noopener">Öffnen ↗</a></div></div>
+        <div class="field"><label>Auf der Homepage einbinden <span class="muted">(diesen Code an der gewünschten Stelle einfügen)</span></label><textarea readonly rows="3" style="font-family:monospace;font-size:13px">${esc(code)}</textarea></div>
+        <div class="field"><label>Daten für eigene Einbindung (JSON)</label><input type="text" readonly value="${esc(location.origin + '/boerse/machines.json')}"></div>`,
+      foot: `<button class="btn" data-close>Schließen</button><button class="btn primary" id="w-copy">${icon('link')} Code kopieren</button>`,
+    });
+    $('#w-copy', md.el).onclick = async () => { try { await navigator.clipboard.writeText(code); toast('Code kopiert'); } catch { toast('Bitte manuell markieren und kopieren', true); } };
+  };
   $('#u-search').onclick = () => openSearchForm({}, () => { if (tab === 'suche') loadSuche(); else location.hash = '#/gebrauchte/suche'; });
   await reload();
   if (openId) openUsedForm(openId, loadLager);
@@ -1753,6 +1766,9 @@ async function openUsedForm(id, onSaved) {
       <div class="field full"><label>Ausstattung <span class="muted">(eine Zeile oder mit Komma getrennt – erscheint als Liste im Exposé)</span></label><textarea name="equipment" rows="2" placeholder="Kabine, Schaufel 1,0 m, Palettengabel, 3. Steuerkreis">${esc(m.equipment || '')}</textarea></div>
       <div class="field full"><label>Beschreibung für das Exposé</label><textarea name="description" rows="3" placeholder="z. B. Sehr gepflegt, neue Reifen, Service frisch gemacht">${esc(m.description || '')}</textarea></div>
       <div class="sec full">Preis &amp; Lager</div>
+      <div class="field full homepage-box"><label class="check"><input type="checkbox" name="public" ${m.public ? 'checked' : ''}> <b>Auf der Homepage zeigen</b> (Maschinenbörse)</label>
+        <label class="check"><input type="checkbox" name="show_price" ${m.show_price === 0 ? '' : 'checked'}> Preis anzeigen <span class="muted">(sonst „Preis auf Anfrage“)</span></label>
+        <div class="small muted">Gezeigt werden Fotos, Daten, Ausstattung, Beschreibung und Wunschpreis. EK, Notizen, Vorbesitzer, Seriennummer und Standort bleiben intern. Verkaufte Maschinen verschwinden automatisch.${m.public && m.status !== 'verkauft' ? ` <a href="/boerse/m/${m.id}" target="_blank" rel="noopener">Auf der Börse ansehen ↗</a>` : ''}</div></div>
       <div class="field"><label>Einkaufspreis netto (EK)</label><div class="money"><input type="text" inputmode="decimal" name="purchase_price" value="${eur2(m.purchase_price)}" placeholder="0,00"><span>€</span></div></div>
       <div class="field"><label>Wunschpreis netto (VK)</label><div class="money"><input type="text" inputmode="decimal" name="asking_price" value="${eur2(m.asking_price)}" placeholder="0,00"><span>€</span></div></div>
       <div class="field"><label>Im Lager seit</label><input type="date" name="in_date" value="${esc(m.in_date || todayISO())}"></div>

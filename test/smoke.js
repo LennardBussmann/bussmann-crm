@@ -421,6 +421,26 @@ const U = require('../lib/util');
     const ex = await call('a', 'GET', `/api/used/${um1.id}/expose.html`);
     assert.ok(ex.includes('Weidemann 1390') && ex.includes('27.500 €') && ex.includes(`/api/used-photos/${ph.id}`) && ex.includes('2.300'));
     assert.ok(!(await call('a', 'GET', `/api/used/${um1.id}/expose.html?price=0`)).includes('27.500 €'));
+    // öffentliche Maschinenbörse
+    let pub = await (await fetch(base + '/boerse/machines.json')).json();
+    assert.ok(!pub.machines.some((x) => x.id === um1.id));
+    assert.equal((await fetch(base + `/boerse/foto/${ph.id}`)).status, 404);
+    await call('a', 'PUT', `/api/used/${um1.id}`, { public: true, show_price: false, notes: 'GEHEIM-NOTIZ' });
+    assert.equal((await call('a', 'GET', `/api/used/${um1.id}`)).public, 1);
+    await call('a', 'PUT', `/api/used/${um1.id}`, { location: 'Halle 9' }); // andere Änderung lässt Haken stehen
+    pub = await (await fetch(base + '/boerse/machines.json')).json();
+    const pm = pub.machines.find((x) => x.id === um1.id);
+    assert.ok(pm); assert.equal(pm.price_net, null); assert.equal(pm.photos.length, 1);
+    const pubRaw = JSON.stringify(pub);
+    assert.ok(!pubRaw.includes('GEHEIM') && !pubRaw.includes('18000') && !pubRaw.includes('purchase') && !pubRaw.includes('Halle 9'));
+    await call('a', 'PUT', `/api/used/${um1.id}`, { show_price: true });
+    assert.equal((await (await fetch(base + '/boerse/machines.json')).json()).machines.find((x) => x.id === um1.id).price_gross, 32725);
+    const fr = await fetch(base + `/boerse/foto/${ph.id}`); assert.equal(fr.status, 200); assert.equal(await fr.text(), 'jpgdata');
+    const bp = await fetch(base + '/boerse/'); assert.ok(!bp.headers.get('x-frame-options'));
+    assert.ok((await bp.text()).includes('Weidemann 1390'));
+    assert.ok((await (await fetch(base + `/boerse/m/${um1.id}?embed=1`)).text()).includes('32.725 €'));
+    assert.ok((await (await fetch(base + '/boerse/embed.js')).text()).includes('bussmann-boerse'));
+    assert.equal((await fetch(base + `/boerse/m/${um2.id}`)).status, 404);
     // gebrauchter Einkauf -> automatisch im Lager; Verkauf -> verkauft; Verkauf gelöscht -> wieder verfügbar
     const ekU = await call('a', 'POST', '/api/sales', { kind: 'einkauf', date: U.today(), condition: 'gebraucht', category: 'Traktor', brand: 'Fendt', model: '310', purchase_price: '25.000', party: 'Händler X' });
     const autoU = (await call('a', 'GET', '/api/used')).rows.find((r) => r.purchase_id === ekU.id);

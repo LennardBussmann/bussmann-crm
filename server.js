@@ -1105,7 +1105,7 @@ app.delete('/api/sales/:id', auth, (req, res) => {
 
 // ---------- Gebrauchtmaschinen-Lager & Suchaufträge ----------
 const USED_STATUS = { verfuegbar: 'Verfügbar', reserviert: 'Reserviert', verkauft: 'Verkauft' };
-const USED_FIELDS = ['category', 'brand', 'model', 'serial', 'year', 'hours', 'condition', 'equipment', 'description', 'purchase_price', 'asking_price', 'location', 'status', 'in_date', 'origin', 'customer_id', 'user_id', 'notes'];
+const USED_FIELDS = ['category', 'brand', 'model', 'serial', 'year', 'hours', 'condition', 'equipment', 'description', 'purchase_price', 'asking_price', 'location', 'status', 'in_date', 'origin', 'customer_id', 'user_id', 'notes', 'public', 'show_price'];
 const USED_SQL = `SELECT m.*, u.name user_name, ${CUST_LABEL_SQL} customer_name,
   (SELECT id FROM used_photos f WHERE f.used_id=m.id ORDER BY sort, id LIMIT 1) photo_id,
   (SELECT COUNT(*) FROM used_photos f WHERE f.used_id=m.id) photo_count
@@ -1117,6 +1117,7 @@ const usedCalc = (m) => {
   return { ...m, days, margin, title: [m.brand, m.model].filter(Boolean).join(' ') || m.category || 'Maschine' };
 };
 const intOrNull = (v, lo, hi) => { const n = Number(String(v ?? '').replace(/\./g, '')); return v !== '' && v != null && Number.isInteger(n) && n >= lo && n <= hi ? n : null; };
+const flag = (v) => v === true || v === 1 || v === '1' || v === 'on' || v === 'true';
 function cleanUsed(b, user) {
   const m = {
     category: U.str(b.category, 60) || null, brand: U.str(b.brand, 60) || null, model: U.str(b.model, 100) || null, serial: U.str(b.serial, 100) || null,
@@ -1129,6 +1130,7 @@ function cleanUsed(b, user) {
     customer_id: b.customer_id && get('SELECT id FROM customers WHERE id=?', b.customer_id) ? Number(b.customer_id) : null,
     user_id: b.user_id && get('SELECT id FROM users WHERE id=?', b.user_id) ? Number(b.user_id) : user.id,
     notes: U.str(b.notes, 5000) || '',
+    public: flag(b.public) ? 1 : 0, show_price: b.show_price === undefined || flag(b.show_price) ? 1 : 0,
   };
   if (Number.isNaN(m.purchase_price) || Number.isNaN(m.asking_price)) return { error: 'Bitte Preise als Zahl eingeben' };
   if (!m.category && !m.brand && !m.model) return { error: 'Bitte mindestens Art, Marke oder Modell angeben' };
@@ -1991,6 +1993,8 @@ app.get('/api/version', (req, res) => {
 });
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 // HTML/JS/CSS immer neu prüfen (ETag), damit Updates sofort ankommen
+// öffentliche Maschinenbörse für die Homepage
+require('./lib/boerse')(app, { get, all, DATA_DIR, PHOTO_TYPES });
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', setHeaders: (res, p) => res.set('Cache-Control', /\.(png|ico)$/.test(p) ? 'public, max-age=86400' : 'no-cache') }));
 app.use('/api', (req, res) => res.status(404).json({ error: 'Nicht gefunden' }));
 app.use((err, req, res, next) => {
