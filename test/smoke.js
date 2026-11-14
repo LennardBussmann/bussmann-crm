@@ -340,7 +340,10 @@ const U = require('../lib/util');
     assert.equal(pl.rows.length, 2, 'nur offene'); assert.equal(pl.stats.open, 2); assert.equal(pl.stats.volume, 140000);
     assert.equal(pl.stats.weighted, 42000 * 0.5 + 98000 * 0.75); assert.equal(pl.stats.overdue, 1); assert.equal(pl.stats.soon, 1); assert.equal(pl.stats.quote, 0);
     assert.equal(pl.rows.find((r) => r.id === pr1).ampel, 'rot'); assert.equal(pl.rows.find((r) => r.id === pr2).kunde_name, 'Hof Neu');
-    assert.equal((await call('a', 'GET', '/api/projects?brand=Massey%20Ferguson')).rows.length, 1);
+    const plMF = await call('a', 'GET', '/api/projects?brand=Massey%20Ferguson');
+    assert.equal(plMF.rows.length, 1); assert.equal(plMF.stats.open, 1); assert.equal(plMF.stats.volume, 98000); // Kennzahlen folgen dem Filter
+    const repW = await call('a', 'GET', '/api/projects/report.html?brand=Weidemann');
+    assert.ok(repW.includes('42.000 €') && !repW.includes('140.000 €'));
     assert.equal((await call('a', 'GET', '/api/projects?status=*')).rows.length, 3);
     // Wiedervorlage als Aufgabe beim Verkäufer
     let ptask = (await call('k', 'GET', '/api/tasks?scope=mine&status=open')).find((t) => t.project_id === pr1);

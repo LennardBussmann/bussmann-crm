@@ -677,8 +677,9 @@ function projectsQuery(q) {
   if (q.meta) return [];
   return all(`${PROJECT_SQL} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY p.faellig IS NULL, p.faellig, p.id`, ...params).map(projCalc);
 }
-function projectStats(user) {
-  const all_ = all(`${PROJECT_SQL} ${user && user !== 'all' ? 'WHERE p.user_id=?' : ''}`, ...(user && user !== 'all' ? [Number(user)] : [])).map(projCalc);
+/** Kennzahlen passend zu den gewählten Filtern (Verkäufer, Marke, Suche; bei einem bestimmten Status nur dieser) */
+function projectStats(q = {}) {
+  const all_ = projectsQuery({ ...q, status: q.status && q.status !== '*' && PROJ_PROB[q.status] !== undefined ? q.status : '*' });
   const open = all_.filter((p) => !p.closed); const won = all_.filter((p) => p.status === 'Gewonnen'); const lost = all_.filter((p) => p.status === 'Verloren');
   const s = (a, f) => a.reduce((n, p) => n + (p[f] || 0), 0);
   return { open: open.length, volume: s(open, 'preis'), weighted: Math.round(open.reduce((n, p) => n + (p.preis || 0) * p.prob, 0)), won: won.length, won_volume: s(won, 'preis'),
@@ -686,11 +687,11 @@ function projectStats(user) {
     overdue: all_.filter((p) => p.ampel === 'rot').length, soon: all_.filter((p) => p.ampel === 'gelb').length, trade_in: s(open, 'inz_wert') };
 }
 app.get('/api/projects', auth, (req, res) => {
-  res.json({ rows: projectsQuery(req.query), stats: projectStats(req.query.user), statuses: PROJ_STATUS, financing: PROJ_FIN, ai: !!aiKey(), pdftext: offerText.available(),
+  res.json({ rows: projectsQuery(req.query), stats: projectStats(req.query), statuses: PROJ_STATUS, financing: PROJ_FIN, ai: !!aiKey(), pdftext: offerText.available(),
     brands: all("SELECT DISTINCT brand FROM projects WHERE brand<>'' ORDER BY brand").map((r) => r.brand) });
 });
 app.get('/api/projects/report.html', auth, (req, res) => {
-  const rows = projectsQuery(req.query); const st = projectStats(req.query.user);
+  const rows = projectsQuery(req.query); const st = projectStats(req.query);
   const h = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const eur = (n) => (n == null ? '' : Math.round(n).toLocaleString('de-DE') + ' €');
   const de = (d) => (d ? d.split('-').reverse().join('.') : '');
