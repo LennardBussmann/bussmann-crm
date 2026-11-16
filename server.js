@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const express = require('express');
 const { get, all, run, tx, getSetting, setSetting, DATA_DIR } = require('./lib/db');
+const Co = require('./lib/company');
 const U = require('./lib/util');
 const L = require('./lib/logic');
 const Series = require('./lib/series');
@@ -61,11 +62,29 @@ const bad = (res, msg) => res.status(400).json({ error: msg });
 
 const loginAttempts = new Map();
 app.get('/api/setup', (req, res) => res.json({ needsSetup: !get('SELECT id FROM users LIMIT 1') }));
+// ---------- Firmendaten (öffentlich lesbar: Name, Logo, Farbe stehen auch auf der Anmeldeseite) ----------
+app.get('/api/company', (req, res) => { res.set('Cache-Control', 'no-cache'); res.json(Co.company()); });
+app.put('/api/company', auth, admin, (req, res) => { Co.save(req.body || {}); res.json(Co.company()); });
+app.post('/api/company/logo', auth, admin, express.raw({ type: () => true, limit: '5mb' }), (req, res) => {
+  try { Co.setLogo(req.body, String(req.get('Content-Type') || '').split(';')[0]); } catch (e) { return bad(res, e.message); }
+  res.json(Co.company());
+});
+app.delete('/api/company/logo', auth, admin, (req, res) => { Co.clearLogo(); res.json(Co.company()); });
+app.post('/api/company/logo/builtin', auth, admin, (req, res) => { Co.clearLogo(); setSetting('company_logo', 'builtin'); res.json(Co.company()); });
+app.get('/firma/logo', (req, res) => {
+  const f = Co.logoFile();
+  if (!f) return res.status(404).end();
+  res.set('Content-Type', f.type); res.set('Cache-Control', 'public, max-age=86400'); res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+  res.sendFile(f.file);
+});
+/** Logo (oder Firmenname als Text) für Druckseiten */
+const printLogo = (C, hh) => (C.logo_url ? `<img src="${C.logo_url}" alt="${hh(C.name)}">` : `<b style="font-size:18pt;font-stretch:87.5%;color:${C.color}">${hh(C.name)}</b>`);
 app.post('/api/setup', (req, res) => {
   if (get('SELECT id FROM users LIMIT 1')) return res.status(403).json({ error: 'Bereits eingerichtet' });
-  const { name, email, password } = req.body || {};
+  const { name, email, password, company } = req.body || {};
   if (!U.str(name) || !/^\S+@\S+\.\S+$/.test(email || '') || String(password || '').length < 8) return bad(res, 'Name, gültige E-Mail und Passwort (mind. 8 Zeichen) angeben');
-  const r = run('INSERT INTO users(name,email,password_hash,role,ical_token,color) VALUES(?,?,?,?,?,?)', U.str(name, 100), email.trim(), U.hashPassword(password), 'admin', U.token(24), '#c0292f');
+  if (U.str(company)) Co.save({ name: company });
+  const r = run('INSERT INTO users(name,email,password_hash,role,ical_token,color) VALUES(?,?,?,?,?,?)', U.str(name, 100), email.trim(), U.hashPassword(password), 'admin', U.token(24), Co.company().color);
   const tok = U.token();
   run('INSERT INTO sessions(token,user_id,expires_at) VALUES(?,?,?)', tok, r.lastInsertRowid, Date.now() + SESSION_DAYS * 864e5);
   setSessionCookie(req, res, tok, SESSION_DAYS * 86400);
@@ -184,7 +203,7 @@ app.put('/api/settings', auth, admin, (req, res) => {
 app.post('/api/settings/testmail', auth, admin, wrap(async (req, res) => {
   if (!mailEnabled()) return bad(res, 'SMTP ist noch nicht eingerichtet');
   try {
-    await sendMail({ to: req.user.email, subject: 'Testnachricht vom Bussmann CRM', html: '<p>Der E-Mail-Versand funktioniert. 👍</p>', text: 'Der E-Mail-Versand funktioniert.' });
+    await sendMail({ to: req.user.email, subject: 'Testnachricht vom ' + Co.company().app_name, html: '<p>Der E-Mail-Versand funktioniert. 👍</p>', text: 'Der E-Mail-Versand funktioniert.' });
     res.json({ ok: true, to: req.user.email });
   } catch (e) { bad(res, 'Versand fehlgeschlagen: ' + e.message); }
 }));
@@ -691,7 +710,7 @@ app.get('/api/projects', auth, (req, res) => {
     brands: all("SELECT DISTINCT brand FROM projects WHERE brand<>'' ORDER BY brand").map((r) => r.brand) });
 });
 app.get('/api/projects/report.html', auth, (req, res) => {
-  const rows = projectsQuery(req.query); const st = projectStats(req.query);
+  const rows = projectsQuery(req.query); const st = projectStats(req.query); const C = Co.company();
   const h = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const eur = (n) => (n == null ? '' : Math.round(n).toLocaleString('de-DE') + ' €');
   const de = (d) => (d ? d.split('-').reverse().join('.') : '');
@@ -704,11 +723,11 @@ app.get('/api/projects/report.html', auth, (req, res) => {
 <style>
 @page { size: A4 landscape; margin: 10mm 10mm 12mm; }
 * { box-sizing: border-box; } body { font-family: 'Nunito Sans', Arial, sans-serif; color: #2b2d2e; font-size: 8.8pt; margin: 0; padding: 16px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-header { display: flex; align-items: flex-end; justify-content: space-between; border-bottom: 3px solid #c0292f; padding-bottom: 8px; margin-bottom: 10px; }
+header { display: flex; align-items: flex-end; justify-content: space-between; border-bottom: 3px solid ${C.color}; padding-bottom: 8px; margin-bottom: 10px; }
 header img { height: 42px; } h1 { margin: 0; font-size: 17pt; font-stretch: 87.5%; } .sub { color: #6a6d6e; font-weight: 700; text-align: right; }
 .kpis { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-bottom: 10px; }
-.kpi { border: 1px solid #ddd; border-left: 4px solid #c0292f; padding: 5px 8px; } .kpi .n { font-size: 12.5pt; font-weight: 900; font-stretch: 87.5%; } .kpi .l { color: #6a6d6e; font-size: 7pt; font-weight: 700; text-transform: uppercase; }
-.kpi.a .n { color: #c0292f; }
+.kpi { border: 1px solid #ddd; border-left: 4px solid ${C.color}; padding: 5px 8px; } .kpi .n { font-size: 12.5pt; font-weight: 900; font-stretch: 87.5%; } .kpi .l { color: #6a6d6e; font-size: 7pt; font-weight: 700; text-transform: uppercase; }
+.kpi.a .n { color: ${C.color}; }
 table { width: 100%; border-collapse: collapse; } thead { display: table-header-group; }
 th { text-align: left; font-size: 7.5pt; text-transform: uppercase; background: #2b2d2e; color: #fff; padding: 5px; }
 td { padding: 4px 5px; border-bottom: 1px solid #e4e4e4; vertical-align: top; } tr { page-break-inside: avoid; } tbody tr:nth-child(even) td { background: #fafafa; }
@@ -716,11 +735,11 @@ td { padding: 4px 5px; border-bottom: 1px solid #e4e4e4; vertical-align: top; } 
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
 tr.won td { background: #eaf3e3 !important; } tr.lost td { color: #999; }
 footer { margin-top: 12px; color: #8a8d8e; font-size: 7.5pt; display: flex; justify-content: space-between; }
-.bar { position: fixed; top: 10px; right: 10px; } .bar button { font: inherit; font-weight: 700; padding: 8px 14px; border-radius: 6px; border: 0; background: #c0292f; color: #fff; cursor: pointer; }
+.bar { position: fixed; top: 10px; right: 10px; } .bar button { font: inherit; font-weight: 700; padding: 8px 14px; border-radius: 6px; border: 0; background: ${C.color}; color: #fff; cursor: pointer; }
 @media print { .bar { display: none; } body { padding: 0; } }
 </style></head><body>
 <div class="bar"><button onclick="window.print()">Drucken / als PDF speichern</button></div>
-<header><img src="/img/logo.png" alt=""><div><h1>${h(brand)}Verkaufsprojekte</h1><div class="sub">${h(filt)}${h(who)} · Stand ${de(U.today())}</div></div></header>
+<header>${printLogo(C, h)}<div><h1>${h(brand)}Verkaufsprojekte</h1><div class="sub">${h(filt)}${h(who)} · Stand ${de(U.today())}</div></div></header>
 <div class="kpis">
   <div class="kpi"><div class="n">${st.open}</div><div class="l">Offene Projekte</div></div>
   <div class="kpi"><div class="n">${eur(st.volume) || '0 €'}</div><div class="l">Angebotsvolumen offen</div></div>
@@ -737,7 +756,7 @@ ${rows.map((p) => `<tr class="${p.status === 'Gewonnen' ? 'won' : p.status === '
 <td class="r">${eur(p.preis)}${p.preis ? `<span class="m">gew. ${eur(p.preis * p.prob)}</span>` : ''}</td><td class="r">${eur(p.inz_wert)}<span class="m">${h(p.inzahlung)}</span></td>
 <td>${h(p.naechster)}</td><td class="nowrap">${p.ampel ? `<span class="dot" style="background:${AMP[p.ampel]}"></span>` : ''}${de(p.faellig)}</td><td>${de(p.abschluss)}</td><td>${de(p.liefer)}</td><td>${h(p.user_name || '')}</td></tr>`).join('') || '<tr><td colspan="13">Keine Projekte für diesen Filter.</td></tr>'}
 </tbody></table>
-<footer><span>Bussmann Land- &amp; Gartentechnik · Hauptstraße 5 · 48329 Havixbeck · 02507 1294</span><span>Ampel: rot = Wiedervorlage überfällig · gelb = in 7 Tagen · grün = später</span></footer>
+<footer><span>${h(Co.contactLine(C))}</span><span>Ampel: rot = Wiedervorlage überfällig · gelb = in 7 Tagen · grün = später</span></footer>
 <script>document.fonts && document.fonts.ready.then(() => setTimeout(() => window.print(), 300));</script>
 </body></html>`);
 });
@@ -1015,7 +1034,7 @@ app.get('/api/sales/export.xlsx', auth, (req, res) => {
 /** Monatsbericht als druckfertige Seite (im Browser „Als PDF speichern“) */
 app.get('/api/sales/report.html', auth, (req, res) => {
   const { rows, uid } = salesQuery(req.query, req.user);
-  const sum = salesSummary(rows);
+  const sum = salesSummary(rows); const C = Co.company();
   const h = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const eur = (n) => (n == null ? '–' : n.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €');
   const pct = (p) => (p == null ? '–' : String(p).replace('.', ',') + ' %');
@@ -1043,23 +1062,23 @@ app.get('/api/sales/report.html', auth, (req, res) => {
 @page { size: A4 landscape; margin: 12mm 12mm 14mm; }
 * { box-sizing: border-box; }
 body { font-family: 'Nunito Sans', Arial, sans-serif; color: #2b2d2e; font-size: 10.5pt; margin: 0; padding: 18px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-header { display: flex; align-items: flex-end; justify-content: space-between; border-bottom: 3px solid #c0292f; padding-bottom: 10px; margin-bottom: 14px; }
+header { display: flex; align-items: flex-end; justify-content: space-between; border-bottom: 3px solid ${C.color}; padding-bottom: 10px; margin-bottom: 14px; }
 header img { height: 46px; } h1 { margin: 0; font-size: 20pt; font-stretch: 87.5%; } .sub { color: #6a6d6e; font-weight: 700; text-align: right; }
 .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
 .kpi { border: 1px solid #ddd; border-radius: 6px; padding: 8px 12px; } .kpi .n { font-size: 16pt; font-weight: 900; font-stretch: 87.5%; } .kpi .l { color: #6a6d6e; font-size: 9pt; font-weight: 700; }
 .kpi.g { border-color: #9cc48a; background: #f3f9ef; }
-h2 { font-size: 12pt; margin: 16px 0 6px; color: #c0292f; break-after: avoid; page-break-after: avoid; }
+h2 { font-size: 12pt; margin: 16px 0 6px; color: ${C.color}; break-after: avoid; page-break-after: avoid; }
 thead { display: table-header-group; }
 table { width: 100%; border-collapse: collapse; } th { text-align: left; font-size: 8.5pt; text-transform: uppercase; color: #6a6d6e; border-bottom: 1.5px solid #6a6d6e; padding: 4px 6px; }
 td { padding: 5px 6px; border-bottom: 1px solid #e4e4e4; vertical-align: top; } tr { page-break-inside: avoid; }
 .r { text-align: right; white-space: nowrap; } .m { color: #6a6d6e; font-size: 8.5pt; font-weight: 400; }
 tfoot td { border-top: 1.5px solid #6a6d6e; border-bottom: 0; font-weight: 800; }
 .neg { color: #a51e24; } footer { margin-top: 18px; color: #8a8d8e; font-size: 8pt; display: flex; justify-content: space-between; }
-.bar { position: fixed; top: 10px; right: 10px; } .bar button { font: inherit; font-weight: 700; padding: 8px 14px; border-radius: 6px; border: 0; background: #c0292f; color: #fff; cursor: pointer; }
+.bar { position: fixed; top: 10px; right: 10px; } .bar button { font: inherit; font-weight: 700; padding: 8px 14px; border-radius: 6px; border: 0; background: ${C.color}; color: #fff; cursor: pointer; }
 @media print { .bar { display: none; } body { padding: 0; } }
 </style></head><body>
 <div class="bar"><button onclick="window.print()">Drucken / als PDF speichern</button></div>
-<header><img src="/img/logo.png" alt=""><div><h1>Verkaufsbericht ${h(period)}</h1><div class="sub">${h(who)} · erstellt am ${de(U.today())} von ${h(req.user.name)}</div></div></header>
+<header>${printLogo(C, h)}<div><h1>Verkaufsbericht ${h(period)}</h1><div class="sub">${h(who)} · erstellt am ${de(U.today())} von ${h(req.user.name)}</div></div></header>
 <div class="kpis">
   <div class="kpi"><div class="n">${sum.sales}</div><div class="l">Verkäufe</div></div>
   <div class="kpi"><div class="n">${eur(sum.revenue)}</div><div class="l">Umsatz netto</div></div>
@@ -1076,7 +1095,7 @@ ${sales.map((r) => `<tr><td>${de(r.date)}</td><td>${mach(r)}</td><td>${party(r)}
 ${buys.length ? `<h2>Einkäufe (${buys.length})</h2><table><thead><tr><th>Datum</th><th>Maschine</th><th>Gekauft von</th>${uid ? '' : '<th>Mitarbeiter</th>'}<th class="r">EK netto</th><th>Status</th></tr></thead><tbody>
 ${buys.map((r) => `<tr><td>${de(r.date)}</td><td>${mach(r)}</td><td>${party(r)}</td>${uid ? '' : `<td>${h(r.user_name || '')}</td>`}<td class="r">${eur(r.purchase_price)}</td><td>${r.sold_by_sale ? 'verkauft' : 'im Lager'}</td></tr>`).join('')}</tbody>
 <tfoot><tr><td colspan="${uid ? 3 : 4}">Summe</td><td class="r">${eur(sum.purchase_sum)}</td><td></td></tr></tfoot></table>` : ''}
-<footer><span>Bussmann Land- &amp; Gartentechnik · alle Beträge netto</span><span>vertraulich – nur für den internen Gebrauch</span></footer>
+<footer><span>${h(C.name)} · alle Beträge netto</span><span>vertraulich – nur für den internen Gebrauch</span></footer>
 <script>document.fonts && document.fonts.ready.then(() => setTimeout(() => window.print(), 300));</script>
 </body></html>`);
 });
@@ -1311,29 +1330,29 @@ app.get('/api/used/:id/expose.html', auth, (req, res) => {
   const h = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const e0 = (n) => Math.round(n).toLocaleString('de-DE') + ' €';
   const showPrice = req.query.price !== '0';
-  const seller = get('SELECT name, email FROM users WHERE id=?', m.user_id);
+  const seller = get('SELECT name, email FROM users WHERE id=?', m.user_id); const C = Co.company();
   const specs = [['Hersteller', m.brand], ['Modell', m.model], ['Maschinenart', m.category], ['Baujahr', m.year], ['Betriebsstunden', m.hours != null ? m.hours.toLocaleString('de-DE') + ' h' : ''], ['Zustand', { neu: 'Neu', vorfuehr: 'Vorführmaschine' }[m.condition] || 'Gebraucht'], ['Seriennummer', req.query.serial === '1' ? m.serial : ''], ['Standort', m.location || 'Havixbeck']].filter(([, v]) => v);
   const eq = String(m.equipment || '').split(/\n|,(?=\s)(?![^(]*\))/).map((s) => s.trim()).filter(Boolean);
   res.set('Content-Security-Policy', "default-src 'self'; img-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'unsafe-inline'");
   res.type('html').send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><title>Exposé ${h(m.title)}</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;700;800&display=swap">
 <style>@page{size:A4;margin:14mm}*{box-sizing:border-box}body{font-family:'Nunito Sans',Arial,sans-serif;color:#222;margin:0;font-size:12.5px}
-.top{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #c0292f;padding-bottom:8px}.top img{height:54px}.top .c{text-align:right;color:#6a6d6e;font-size:11px;line-height:1.4}
+.top{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid ${C.color};padding-bottom:8px}.top img{height:54px}.top .c{text-align:right;color:#6a6d6e;font-size:11px;line-height:1.4}
 h1{font-size:26px;margin:14px 0 2px;font-weight:800}.sub{color:#6a6d6e;font-size:14px;margin-bottom:10px}
 .ph{display:grid;grid-template-columns:2fr 1fr;gap:6px;margin:10px 0}.ph img{width:100%;object-fit:cover;border-radius:4px;display:block}.ph .main{height:300px}.ph .side{display:grid;gap:6px;grid-auto-rows:97px}.ph .side img{height:97px}
 .ph.one{grid-template-columns:1fr}.ph.one .main{height:340px}
 .cols{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:8px}table{width:100%;border-collapse:collapse}td{padding:5px 0;border-bottom:1px solid #e3e3e3;vertical-align:top}td:first-child{color:#6a6d6e;width:42%}
-h2{font-size:14px;color:#c0292f;text-transform:uppercase;letter-spacing:.04em;margin:12px 0 6px}ul{margin:0;padding-left:18px}li{margin:2px 0}
-.price{background:#c0292f;color:#fff;border-radius:6px;padding:12px 16px;margin-top:12px}.price b{font-size:24px;display:block}.price span{font-size:11.5px;opacity:.9}
+h2{font-size:14px;color:${C.color};text-transform:uppercase;letter-spacing:.04em;margin:12px 0 6px}ul{margin:0;padding-left:18px}li{margin:2px 0}
+.price{background:${C.color};color:#fff;border-radius:6px;padding:12px 16px;margin-top:12px}.price b{font-size:24px;display:block}.price span{font-size:11.5px;opacity:.9}
 .desc{white-space:pre-wrap;line-height:1.45}.foot{margin-top:16px;border-top:1px solid #ddd;padding-top:8px;color:#6a6d6e;font-size:10.5px;display:flex;justify-content:space-between;gap:10px}
 .contact{background:#f4f4f4;border-radius:6px;padding:10px 14px;margin-top:12px;line-height:1.5}
 @media screen{body{max-width:820px;margin:20px auto;padding:0 16px}}</style></head><body>
-<div class="top"><img src="/img/logo.png" alt="Bussmann Land- &amp; Gartentechnik"><div class="c">Bussmann Land- &amp; Gartentechnik<br>Hauptstraße 5 · 48329 Havixbeck<br>Tel. 02507 1294 · info@bussmann-havixbeck.de</div></div>
+<div class="top">${printLogo(C, h)}<div class="c">${h(C.name)}<br>${h([C.street, C.zip_city].filter(Boolean).join(' · '))}<br>${h([C.phone ? 'Tel. ' + C.phone : '', C.email].filter(Boolean).join(' · '))}</div></div>
 <h1>${h(m.title)}</h1><div class="sub">${h([m.category, m.year ? 'Baujahr ' + m.year : '', m.hours != null ? m.hours.toLocaleString('de-DE') + ' Betriebsstunden' : ''].filter(Boolean).join(' · '))}</div>
 ${photos.length ? `<div class="ph ${photos.length === 1 ? 'one' : ''}"><img class="main" src="/api/used-photos/${photos[0]}" alt="">${photos.length > 1 ? `<div class="side">${photos.slice(1, 4).map((p) => `<img src="/api/used-photos/${p}" alt="">`).join('')}</div>` : ''}</div>` : ''}
 <div class="cols"><div><h2>Technische Daten</h2><table>${specs.map(([k, v]) => `<tr><td>${h(k)}</td><td><b>${h(v)}</b></td></tr>`).join('')}</table>
 ${showPrice ? `<div class="price">${m.asking_price != null ? `<b>${e0(m.asking_price)}</b><span>zzgl. 19 % MwSt. (${e0(m.asking_price * 1.19)} inkl. MwSt.) · Finanzierung und Leasing möglich</span>` : '<b>Preis auf Anfrage</b><span>Finanzierung und Leasing möglich</span>'}</div>` : ''}
-<div class="contact"><b>Ihr Ansprechpartner</b><br>${h(seller ? seller.name : 'Bussmann Land- & Gartentechnik')}<br>Telefon 02507 1294${seller && seller.email ? '<br>' + h(seller.email) : ''}</div></div>
+<div class="contact"><b>Ihr Ansprechpartner</b><br>${h(seller ? seller.name : C.name)}${C.phone ? '<br>Telefon ' + h(C.phone) : ''}${seller && seller.email ? '<br>' + h(seller.email) : ''}</div></div>
 <div>${eq.length ? `<h2>Ausstattung</h2><ul>${eq.map((x) => `<li>${h(x)}</li>`).join('')}</ul>` : ''}${m.description ? `<h2>Beschreibung</h2><div class="desc">${h(m.description)}</div>` : ''}</div></div>
 ${photos.length > 4 ? `<div class="ph" style="grid-template-columns:repeat(4,1fr)">${photos.slice(4, 12).map((p) => `<img src="/api/used-photos/${p}" style="height:110px" alt="">`).join('')}</div>` : ''}
 <div class="foot"><span>Angebot freibleibend, Zwischenverkauf und Irrtümer vorbehalten. Stand ${U.today().split('-').reverse().join('.')}</span><span>Nr. G-${m.id}</span></div>
@@ -2025,18 +2044,37 @@ app.get('/ical/:token.ics', (req, res) => {
   const u = get('SELECT * FROM users WHERE ical_token=? AND active=1', req.params.token);
   if (!u) return res.status(404).send('Not found');
   res.set('Content-Type', 'text/calendar; charset=utf-8');
-  res.set('Content-Disposition', 'inline; filename="bussmann-crm.ics"');
+  res.set('Content-Disposition', 'inline; filename="crm.ics"');
   res.set('Cache-Control', 'no-cache');
   res.send(buildFeed(u, { birthdays: req.query.birthdays !== '0' }));
 });
 
 // ---------- Frontend ----------
-app.get('/favicon.ico', (req, res) => res.set('Cache-Control', 'public, max-age=86400').sendFile(path.join(__dirname, 'public', 'img', 'favicon.ico')));
-// Desktop-Verknüpfung für Windows (.url-Datei mit Bussmann-Symbol)
-app.get('/Bussmann-CRM.url', (req, res) => {
+// App-Symbol: Bussmann behält seine Symbole, andere Firmen bekommen ein Symbol mit dem Anfangsbuchstaben in der Firmenfarbe
+const ownIcons = () => getSetting('company_logo') === 'builtin';
+app.get('/firma/icon.svg', (req, res) => {
+  const c = Co.company();
+  const ch = (String(c.name).trim()[0] || 'C').toUpperCase().replace(/[<>&"']/g, '');
+  res.set('Content-Type', 'image/svg+xml'); res.set('Cache-Control', 'no-cache');
+  res.send(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="96" fill="${c.color}"/><text x="256" y="350" font-family="Arial,Helvetica,sans-serif" font-size="300" font-weight="700" fill="#fff" text-anchor="middle">${ch}</text></svg>`);
+});
+app.get('/manifest.webmanifest', (req, res) => {
+  const c = Co.company();
+  const icons = ownIcons()
+    ? [{ src: 'img/app-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' }, { src: 'img/app-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' }, { src: 'img/app-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }]
+    : [{ src: 'firma/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' }];
+  res.set('Content-Type', 'application/manifest+json'); res.set('Cache-Control', 'no-cache');
+  res.send(JSON.stringify({ name: c.app_name, short_name: c.app_name, description: 'Kundenverwaltung ' + c.name, id: '/', start_url: '/', scope: '/', display: 'standalone', lang: 'de', background_color: '#ffffff', theme_color: c.color, icons }));
+});
+app.get('/favicon.ico', (req, res) => {
+  if (!ownIcons()) return res.redirect('/firma/icon.svg');
+  res.set('Cache-Control', 'public, max-age=86400').sendFile(path.join(__dirname, 'public', 'img', 'favicon.ico'));
+});
+// Desktop-Verknüpfung für Windows (.url-Datei)
+app.get(['/CRM.url', '/Bussmann-CRM.url'], (req, res) => {
   const base = appUrl() || `${req.protocol}://${req.get('host')}`;
   res.set('Content-Type', 'application/octet-stream');
-  res.set('Content-Disposition', 'attachment; filename="Bussmann CRM.url"');
+  res.set('Content-Disposition', `attachment; filename="${(Co.company().app_name || 'CRM').replace(/[^\w äöüÄÖÜß.-]/g, '')}.url"`);
   res.send(`[InternetShortcut]\r\nURL=${base}/\r\nIconFile=${base}/favicon.ico\r\nIconIndex=0\r\n`);
 });
 app.get('/api/version', (req, res) => {
@@ -2060,7 +2098,7 @@ app.use((err, req, res, next) => {
 
 if (require.main === module) {
   app.listen(PORT, () => {
-    console.log(`Bussmann CRM läuft auf http://localhost:${PORT}`);
+    console.log(`CRM läuft auf http://localhost:${PORT}`);
     L.startScheduler();
     geo.startGeocoder();
   });

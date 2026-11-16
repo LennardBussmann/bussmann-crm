@@ -1,5 +1,5 @@
-/* Bussmann Land- & Gartentechnik – CRM
-   Farben laut Corporate Design 2025: HKS 14 K Rot #c0292f, HKS 92 K Grau #6a6d6e
+/* CRM – Grundfarbe (--red) wird aus Einstellungen → Firma gesetzt.
+   Voreinstellung: Bussmann Corporate Design 2025, HKS 14 K Rot #c0292f, HKS 92 K Grau #6a6d6e
    Schrift: Nunito Sans (Condensed-Schnitte über die wdth-Achse) */
 :root {
   --red: #c0292f;
@@ -422,8 +422,8 @@ button.chip.tagchip { border: 1px dashed var(--line-strong); cursor: pointer; fo
 .tour-menu { position: absolute; right: 12px; bottom: 60px; z-index: 500; display: flex; flex-direction: column; padding: 6px; min-width: 230px; box-shadow: 0 8px 24px rgba(0,0,0,.15); }
 .tour-menu button { display: flex; gap: 8px; align-items: center; background: none; border: 0; padding: 9px 10px; text-align: left; border-radius: 6px; cursor: pointer; font: inherit; color: inherit; }
 .tour-menu button:hover { background: var(--surface-2); }
-.tour-menu button.danger { color: #c0292f; }
-.btn.primary-soft { border-color: #c0292f; color: #c0292f; }
+.tour-menu button.danger { color: var(--red); }
+.btn.primary-soft { border-color: var(--red); color: var(--red); }
 .btn.disabled { opacity: .45; pointer-events: none; }
 .mpop { font-family: var(--font); font-size: 13px; line-height: 1.45; min-width: 210px; }
 .mpop b { font-size: 14px; }
@@ -492,10 +492,10 @@ table.list tbody tr.p-won { background: #f1f8ec; } table.list tbody tr.p-lost td
 .ampel.rot { background: #c0292f; box-shadow: 0 0 0 3px #f6d4d5; } .ampel.gelb { background: #e8a800; box-shadow: 0 0 0 3px #fbecc0; } .ampel.gruen { background: #3f8f2e; box-shadow: 0 0 0 3px #d6ebd0; }
 .form-grid .sec { font-weight: 900; color: var(--red); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; border-bottom: 2px solid var(--red); padding-bottom: 3px; margin-top: 4px; }
 .callout.ok { background: #eef7ea; border-color: #b9dbab; color: #2e5e1c; }
-.offer-drop { display: flex; gap: 12px; align-items: center; padding: 14px 16px; border: 2px dashed #d9b3b5; border-radius: var(--radius); background: #fdf6f6; cursor: pointer; transition: background .15s, border-color .15s; }
-.offer-drop:hover, .offer-drop.over, .offer-drop:focus-visible { background: #fbeaea; border-color: #c0292f; outline: none; }
+.offer-drop { display: flex; gap: 12px; align-items: center; padding: 14px 16px; border: 2px dashed var(--red-100); border-radius: var(--radius); background: var(--red-50); cursor: pointer; transition: background .15s, border-color .15s; }
+.offer-drop:hover, .offer-drop.over, .offer-drop:focus-visible { background: var(--red-50); border-color: var(--red); outline: none; }
 .offer-drop.busy { opacity: .6; cursor: progress; }
-.offer-drop .offer-ico { color: #c0292f; flex: none; }
+.offer-drop .offer-ico { color: var(--red); flex: none; }
 .ai-filled { background: #fff8d6 !important; border-color: #e8c95a !important; }
 .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -2px; animation: spin .8s linear infinite; margin-right: 4px; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -521,12 +521,12 @@ tr.click { cursor: pointer; }
 .photo-strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
 .ph-item { position: relative; flex: none; }
 .ph-item img { width: 150px; height: 112px; object-fit: cover; border-radius: 6px; display: block; cursor: zoom-in; }
-.ph-badge { position: absolute; left: 6px; bottom: 6px; background: #c0292f; color: #fff; font-size: 11px; font-weight: 800; padding: 1px 6px; border-radius: 8px; }
+.ph-badge { position: absolute; left: 6px; bottom: 6px; background: var(--red); color: #fff; font-size: 11px; font-weight: 800; padding: 1px 6px; border-radius: 8px; }
 .ph-del, .ph-first { position: absolute; top: 5px; width: 26px; height: 26px; border-radius: 50%; border: 0; background: rgba(0,0,0,.55); color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
 .ph-del { right: 5px; } .ph-first { left: 5px; font-size: 14px; }
 .ph-del .ico { width: 14px; height: 14px; }
-.ph-add { flex: none; width: 150px; height: 112px; border: 2px dashed #d9b3b5; border-radius: 6px; background: #fdf6f6; color: #c0292f; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; cursor: pointer; font-weight: 700; font-size: 13px; text-align: center; padding: 6px; }
-.ph-add:hover { background: #fbeaea; }
+.ph-add { flex: none; width: 150px; height: 112px; border: 2px dashed var(--red-100); border-radius: 6px; background: var(--red-50); color: var(--red); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; cursor: pointer; font-weight: 700; font-size: 13px; text-align: center; padding: 6px; }
+.ph-add:hover { background: var(--red-100); }
 @media (max-width: 1100px) { .kpis.kpis-6 { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 860px) { .kpis.kpis-6 { grid-template-columns: repeat(2, 1fr); } .ph-item img, .ph-add { width: 120px; height: 90px; } }
 
@@ -569,3 +569,10 @@ tr.click { cursor: pointer; }
 .chk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 2px 12px; }
 .camp .chip { white-space: normal; max-width: 100%; }
 .chip.soc { background: #e8f0fe; color: #1a56c4; }
+
+/* Firmen-Schriftzug, wenn kein Logo hochgeladen ist */
+.logo-text { font-weight: 900; font-stretch: 87.5%; color: var(--red); font-size: 22px; line-height: 1.1; letter-spacing: .2px; }
+.brand .logo-text { font-size: 19px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px; display: inline-block; vertical-align: middle; }
+.login .logo .logo-text { font-size: 30px; display: block; margin-bottom: 4px; }
+.co-logo { min-height: 48px; display: flex; align-items: center; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
+.co-logo img { max-height: 56px; max-width: 240px; display: block; }

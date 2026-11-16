@@ -1,4 +1,4 @@
-/* Bussmann CRM – Frontend (ohne Build-Schritt, reines JavaScript) */
+/* CRM – Frontend (ohne Build-Schritt, reines JavaScript). Firmenname, Logo und Farbe kommen aus Einstellungen → Firma. */
 'use strict';
 
 // ======================= Hilfsfunktionen =======================
@@ -354,7 +354,25 @@ async function watchVersion() {
   window.addEventListener('focus', check);
 }
 
+/** Firmendaten (Name, Logo, Farbe) laden und auf die Oberfläche anwenden */
+async function loadCompany() {
+  try { state.company = await fetch('/api/company').then((r) => r.json()); } catch { state.company = state.company || { name: '', app_name: 'CRM', color: '#c0292f', logo_url: '' }; }
+  const c = state.company; const r = document.documentElement.style;
+  r.setProperty('--red', c.color);
+  r.setProperty('--red-dark', `color-mix(in srgb, ${c.color} 82%, black)`);
+  r.setProperty('--red-50', `color-mix(in srgb, ${c.color} 9%, white)`);
+  r.setProperty('--red-100', `color-mix(in srgb, ${c.color} 20%, white)`);
+  document.title = c.app_name || 'CRM';
+  const tc = document.querySelector('meta[name="theme-color"]'); if (tc) tc.content = c.color;
+  const at = document.querySelector('meta[name="apple-mobile-web-app-title"]'); if (at) at.content = c.app_name || 'CRM';
+  if (c.logo !== 'builtin') $$('link[rel~="icon"], link[rel="apple-touch-icon"]').forEach((l) => { l.href = '/firma/icon.svg'; l.removeAttribute('sizes'); l.type = 'image/svg+xml'; });
+  return c;
+}
+/** Logo der Firma – oder der Name als Schriftzug, wenn kein Logo hochgeladen ist */
+const companyLogo = () => { const c = state.company || {}; return c.logo_url ? `<img src="${esc(c.logo_url)}" alt="${esc(c.name)}">` : `<span class="logo-text">${esc(c.name || 'CRM')}</span>`; };
+
 async function boot() {
+  await loadCompany();
   try {
     const me = await api('/me', { allow401: true });
     state.me = me.user; state.mailEnabled = me.mailEnabled; state.unread = me.unread;
@@ -377,7 +395,7 @@ async function refreshUnread() {
 function renderLogin() {
   $('#modal-root').innerHTML = '';
   $('#app').innerHTML = `<div class="login"><div class="box">
-    <div class="logo"><img src="img/logo.png" alt="Bussmann Land- & Gartentechnik"><div class="slogan">Kundenverwaltung</div></div>
+    <div class="logo">${companyLogo()}<div class="slogan">Kundenverwaltung</div></div>
     <form class="card" id="login-form"><div class="card-body">
       <h2>Anmelden</h2>
       <div class="field"><label>E-Mail</label><input type="email" name="email" autocomplete="username" required></div>
@@ -392,10 +410,11 @@ function renderLogin() {
 }
 function renderSetup() {
   $('#app').innerHTML = `<div class="login"><div class="box">
-    <div class="logo"><img src="img/logo.png" alt="Bussmann Land- & Gartentechnik"><div class="slogan">Ersteinrichtung</div></div>
+    <div class="logo">${state.company && state.company.logo_url ? companyLogo() : '<span class="logo-text">CRM</span>'}<div class="slogan">Ersteinrichtung</div></div>
     <form class="card" id="setup-form"><div class="card-body">
-      <h2>Administrator anlegen</h2>
-      <p class="muted small" style="margin:0">Dies ist der erste Zugang. Weitere Kollegen legen Sie danach unter Einstellungen an.</p>
+      <h2>Firma und Administrator anlegen</h2>
+      <p class="muted small" style="margin:0">Dies ist der erste Zugang. Logo, Adresse und Farbe stellen Sie danach unter Einstellungen → Firma ein, weitere Kollegen unter Einstellungen → Benutzer.</p>
+      <div class="field"><label>Name der Firma</label><input type="text" name="company" required placeholder="z. B. Muster Landtechnik GmbH"></div>
       <div class="field"><label>Name</label><input type="text" name="name" required></div>
       <div class="field"><label>E-Mail</label><input type="email" name="email" required></div>
       <div class="field"><label>Passwort (mind. 8 Zeichen)</label><input type="password" name="password" minlength="8" required autocomplete="new-password"></div>
@@ -412,7 +431,7 @@ function renderShell() {
   const nav = [['start', 'home', 'Übersicht'], ['kunden', 'users', 'Kunden'], ['karte', 'map', 'Karte'], ['aufgaben', 'tasks', 'Aufgaben'], ['kalender', 'cal', 'Kalender'], ['projekte', 'target', 'Projekte'], ['gebrauchte', 'tractor', 'Maschinen'], ['aktionen', 'bell', 'Aktionen'], ['verkaeufe', 'euro', 'Verkäufe'], ['einstellungen', 'gear', 'Einstellungen']];
   $('#app').innerHTML = `<div class="shell">
     <header class="topbar">
-      <a class="brand" href="#/"><img src="img/logo.png" alt="Bussmann Land- & Gartentechnik"></a>
+      <a class="brand" href="#/">${companyLogo()}</a>
       <div class="search">
         <span class="ico">${icon('search')}</span>
         <input type="search" id="gsearch" placeholder="Kunde suchen (Name, Ort, Telefon …)" autocomplete="off">
@@ -427,7 +446,7 @@ function renderShell() {
         <button class="btn ghost icon" id="logout" title="Abmelden">${icon('logout')}</button></div>
     </header>
     <aside class="sidebar"><nav class="nav">${nav.map(([r, i, l]) => `<a href="#/${r === 'start' ? '' : r}" data-r="${r}">${icon(i, 'lg')}${l}</a>`).join('')}</nav>
-      <div class="foot">Bussmann Land- &amp; Gartentechnik<br>Wenn Sie Qualität und Service schätzen!</div></aside>
+      <div class="foot">${esc(state.company?.name || '')}${state.company?.slogan ? '<br>' + esc(state.company.slogan) : ''}</div></aside>
     <main class="main" id="main"></main>
     <nav class="mobile-nav">${nav.filter(([r]) => !['karte', 'verkaeufe', 'gebrauchte', 'aktionen'].includes(r)).map(([r, i, l]) => `<a href="#/${r === 'start' ? '' : r}" data-r="${r}">${icon(i, 'lg')}${l === 'Einstellungen' ? 'Mehr' : l}</a>`).join('')}</nav>
   </div>`;
@@ -1754,7 +1773,7 @@ async function viewUsed(main, sub) {
   $('#u-new').onclick = () => openUsedForm(null, loadLager);
   $('#u-web').onclick = () => {
     const url = location.origin + '/boerse/';
-    const code = `<div id="bussmann-boerse"></div>\n<script src="${location.origin}/boerse/embed.js"></script>`;
+    const code = `<div id="crm-boerse"></div>\n<script src="${location.origin}/boerse/embed.js"></script>`;
     const md = modal({
       title: 'Maschinenbörse für die Homepage', wide: true,
       body: `<p>Alle Maschinen mit Haken <b>„Auf der Homepage zeigen“</b> stehen automatisch in der öffentlichen Börse. Verkaufte verschwinden von selbst.</p>
@@ -2625,14 +2644,14 @@ async function viewSettings(main) {
 
       <div class="card"><div class="card-head"><h2>${icon('home', 'lg')} Symbol auf dem Desktop / Handy</h2></div><div class="card-body">
         <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
-          <img src="img/app-192.png" alt="" width="72" height="72" style="border-radius:16px;box-shadow:var(--shadow)">
+          <img src="${state.company?.logo === 'builtin' ? 'img/app-192.png' : '/firma/icon.svg'}" alt="" width="72" height="72" style="border-radius:16px;box-shadow:var(--shadow)">
           <div style="flex:1;min-width:240px">
             <button class="btn primary ${installPrompt ? '' : 'hidden'}" id="app-install">${icon('download')} Als App installieren</button>
-            <a class="btn" href="/Bussmann-CRM.url" download>${icon('link')} Desktop-Verknüpfung herunterladen</a>
+            <a class="btn" href="/CRM.url" download>${icon('link')} Desktop-Verknüpfung herunterladen</a>
           </div>
         </div>
         <div class="form-grid" style="margin-top:14px">
-          <div><b>Windows (Edge oder Chrome)</b><ol class="steps"><li>„Als App installieren“ klicken – oder in Edge: Menü <b>…</b> → Apps → <i>Diese Website als App installieren</i>, in Chrome: Menü <b>⋮</b> → Streamen, speichern und teilen → <i>Seite als App installieren</i>.</li><li>Das CRM öffnet sich dann in einem eigenen Fenster mit Bussmann-Symbol auf dem Desktop und in der Taskleiste.</li></ol></div>
+          <div><b>Windows (Edge oder Chrome)</b><ol class="steps"><li>„Als App installieren“ klicken – oder in Edge: Menü <b>…</b> → Apps → <i>Diese Website als App installieren</i>, in Chrome: Menü <b>⋮</b> → Streamen, speichern und teilen → <i>Seite als App installieren</i>.</li><li>Das CRM öffnet sich dann in einem eigenen Fenster mit eigenem Symbol auf dem Desktop und in der Taskleiste.</li></ol></div>
           <div><b>iPhone / iPad</b><ol class="steps"><li>Seite in Safari öffnen.</li><li>Teilen-Symbol (Quadrat mit Pfeil) → <i>Zum Home-Bildschirm</i>.</li></ol><b>Android</b><ol class="steps"><li>In Chrome Menü ⋮ → <i>App installieren</i>.</li></ol></div>
         </div>
       </div></div>
@@ -2654,11 +2673,12 @@ async function viewSettings(main) {
         ${state.users.map((u) => `<tr style="cursor:default"><td>${avatar(u.name, u.id, 'xs')} <b>${esc(u.name)}</b></td><td>${esc(u.email)}</td><td>${u.role === 'admin' ? 'Administrator' : 'Mitarbeiter'}</td><td>${u.active ? '<span class="chip ok">aktiv</span>' : '<span class="chip">deaktiviert</span>'}</td><td style="text-align:right"><button class="btn sm" data-uedit="${u.id}">${icon('edit')} Bearbeiten</button></td></tr>`).join('')}
         </tbody></table></div>
 
+      <div class="card"><div class="card-head"><h2>${icon('home', 'lg')} Firma</h2><span class="muted small">Name, Logo und Farbe erscheinen im CRM, in der Maschinenbörse, in PDFs und E-Mails</span></div><div class="card-body" id="co-body">Lädt …</div></div>
       <div class="card"><div class="card-head"><h2>${icon('mail', 'lg')} E-Mail-Versand (SMTP)</h2><span class="chip ${state.mailEnabled ? 'ok' : 'warn'}">${state.mailEnabled ? 'aktiv' : 'nicht eingerichtet'}</span></div><div class="card-body" id="smtp-body">Lädt …</div></div>
       <div class="card"><div class="card-head"><h2>${icon('file', 'lg')} KI-Auswertung von Angeboten</h2><span class="chip" id="ai-chip"></span></div><div class="card-body" id="ai-body">Lädt …</div></div>` : ''}
     </div>`;
 
-  $('#app-install').onclick = async () => { if (!installPrompt) return; installPrompt.prompt(); const r = await installPrompt.userChoice; if (r.outcome === 'accepted') toast('Bussmann CRM wurde installiert'); installPrompt = null; $('#app-install').classList.add('hidden'); };
+  $('#app-install').onclick = async () => { if (!installPrompt) return; installPrompt.prompt(); const r = await installPrompt.userChoice; if (r.outcome === 'accepted') toast((state.company?.app_name || 'CRM') + ' wurde installiert'); installPrompt = null; $('#app-install').classList.add('hidden'); };
   $('#ical-copy').onclick = async () => { try { await navigator.clipboard.writeText(ical.https); toast('Adresse kopiert'); } catch { toast('Bitte manuell markieren und kopieren', true); } };
   $('#ical-reset').onclick = async () => { if (await confirmBox('Neue Abo-Adresse erzeugen? Bestehende Abos in Outlook/iPhone funktionieren dann nicht mehr und müssen neu eingerichtet werden.', 'Neu erzeugen')) { await api('/me/ical/reset', { method: 'POST', body: {} }); viewSettings(main); } };
   $('#me-form').onsubmit = async (e) => {
@@ -2668,16 +2688,17 @@ async function viewSettings(main) {
   if (!isAdmin) return;
   $('#u-new').onclick = () => openUserForm();
   $$('[data-uedit]').forEach((b) => b.onclick = () => openUserForm(state.users.find((u) => u.id === Number(b.dataset.uedit))));
+  renderCompanyForm(main);
   const s = await api('/settings');
   $('#smtp-body').innerHTML = `
     ${s.env_override ? '<p class="callout warn small">SMTP wird über Umgebungsvariablen gesteuert; die Werte hier werden ignoriert.</p>' : ''}
     <form id="smtp-form" class="form-grid">
-      <div class="field full"><label>Adresse der Anwendung (für Links in E-Mails und das Kalender-Abo)</label><input type="url" name="app_url" value="${esc(s.app_url)}" placeholder="https://crm.landtechnik-bussmann.de"></div>
+      <div class="field full"><label>Adresse der Anwendung (für Links in E-Mails und das Kalender-Abo)</label><input type="url" name="app_url" value="${esc(s.app_url)}" placeholder="https://crm.ihre-firma.de"></div>
       <div class="field"><label>SMTP-Server</label><input type="text" name="smtp_host" value="${esc(s.smtp_host)}" placeholder="z. B. smtp.office365.com"></div>
       <div class="field"><label>Port</label><input type="number" name="smtp_port" value="${esc(s.smtp_port || '587')}"></div>
       <div class="field"><label>Benutzername</label><input type="text" name="smtp_user" value="${esc(s.smtp_user)}" autocomplete="off"></div>
       <div class="field"><label>Passwort ${s.smtp_pass_set ? '<span class="muted">(gespeichert – leer lassen zum Beibehalten)</span>' : ''}</label><input type="password" name="smtp_pass" autocomplete="new-password"></div>
-      <div class="field"><label>Absender</label><input type="text" name="smtp_from" value="${esc(s.smtp_from)}" placeholder="Bussmann CRM <crm@landtechnik-bussmann.de>"></div>
+      <div class="field"><label>Absender</label><input type="text" name="smtp_from" value="${esc(s.smtp_from)}" placeholder="${esc(state.company?.app_name || 'CRM')} <crm@ihre-firma.de>"></div>
       <div class="field"><label>&nbsp;</label><label class="check"><input type="checkbox" name="smtp_secure_cb" ${s.smtp_secure === '1' ? 'checked' : ''}> SSL/TLS direkt (Port 465)</label></div>
       <div class="full" style="display:flex;gap:8px"><button class="btn primary" type="submit">Speichern</button><button class="btn" type="button" id="smtp-test">Testmail an mich senden</button></div>
     </form>`;
@@ -2702,6 +2723,44 @@ async function viewSettings(main) {
     const cl = $('#ai-clear'); if (cl) cl.onclick = async () => { try { await api('/settings', { method: 'PUT', body: { ai_key_clear: true } }); projMeta = null; toast('Schlüssel entfernt'); viewSettings(main); } catch (err) { fail(err); } };
   }
   $('#smtp-test').onclick = async () => { try { const r = await api('/settings/testmail', { method: 'POST', body: {} }); toast('Testmail gesendet an ' + r.to); } catch (e) { fail(e); } };
+}
+
+function renderCompanyForm(main) {
+  const c = state.company;
+  $('#co-body').innerHTML = `<form id="co-form" class="form-grid">
+    <div class="field"><label>Firmenname <span class="req">*</span></label><input type="text" name="name" value="${esc(c.name)}" required></div>
+    <div class="field"><label>Name des Programms <span class="muted">(Fenstertitel, E-Mails)</span></label><input type="text" name="app_name" value="${esc(c.app_name)}" placeholder="z. B. Muster CRM"></div>
+    <div class="field"><label>Straße</label><input type="text" name="street" value="${esc(c.street)}"></div>
+    <div class="field"><label>PLZ und Ort</label><input type="text" name="zip_city" value="${esc(c.zip_city)}"></div>
+    <div class="field"><label>Telefon</label><input type="text" name="phone" value="${esc(c.phone)}"></div>
+    <div class="field"><label>E-Mail</label><input type="email" name="email" value="${esc(c.email)}"></div>
+    <div class="field"><label>Homepage</label><input type="text" name="website" value="${esc(c.website)}" placeholder="www.ihre-firma.de"></div>
+    <div class="field"><label>Leitspruch <span class="muted">(unten links im Menü)</span></label><input type="text" name="slogan" value="${esc(c.slogan)}"></div>
+    <div class="field"><label>Firmenfarbe</label><div style="display:flex;gap:8px;align-items:center"><input type="color" name="color" value="${esc(c.color)}" style="width:56px;height:38px;padding:2px"><span class="muted small">Buttons, Überschriften, Markierungen</span></div></div>
+    <div class="field"><label>Logo <span class="muted">(PNG, JPG oder WebP, am besten quer und mit weißem oder durchsichtigem Hintergrund)</span></label>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <div class="co-logo">${c.logo_url ? `<img src="${esc(c.logo_url)}" alt="">` : '<span class="muted small">kein Logo – der Firmenname wird als Schriftzug gezeigt</span>'}</div>
+        <label class="btn sm">${icon('download')} Logo hochladen<input type="file" id="co-logo" accept="image/png,image/jpeg,image/webp" hidden></label>
+        ${c.logo_url ? '<button type="button" class="btn sm" id="co-logo-del">Logo entfernen</button>' : ''}
+      </div></div>
+    <div class="full"><button class="btn primary" type="submit">Speichern</button></div>
+  </form>`;
+  const apply = async (co) => { state.company = co; await loadCompany(); renderShell(); route(); };
+  $('#co-form').onsubmit = async (e) => {
+    e.preventDefault();
+    try { await apply(await api('/company', { method: 'PUT', body: formData(e.target) })); toast('Firmendaten gespeichert'); } catch (err) { fail(err); }
+  };
+  $('#co-logo').onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    if (f.size > 5e6) { toast('Das Logo ist zu groß (höchstens 5 MB)', true); return; }
+    try {
+      const r = await fetch('/api/company/logo', { method: 'POST', headers: { 'Content-Type': f.type, 'X-Requested-With': 'crm' }, body: f });
+      const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Fehler');
+      await apply(d); toast('Logo gespeichert');
+    } catch (err) { fail(err); }
+  };
+  const del = $('#co-logo-del');
+  if (del) del.onclick = async () => { if (!await confirmBox('Logo entfernen? Statt des Logos wird dann der Firmenname gezeigt.', 'Entfernen')) return; try { await apply(await api('/company/logo', { method: 'DELETE' })); toast('Logo entfernt'); } catch (err) { fail(err); } };
 }
 
 function openUserForm(u) {

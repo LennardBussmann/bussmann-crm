@@ -30,8 +30,26 @@ const U = require('../lib/util');
     return data;
   };
   try {
-    await call('a', 'POST', '/api/setup', { name: 'Lennard Bussmann', email: 'admin@test.de', password: 'geheim123' });
+    await call('a', 'POST', '/api/setup', { name: 'Lennard Bussmann', email: 'admin@test.de', password: 'geheim123', company: 'Muster Landtechnik GmbH' });
     const me = await call('a', 'GET', '/api/me');
+    // Firmendaten (für andere Betriebe einstellbar)
+    let co = await call('x', 'GET', '/api/company');
+    assert.equal(co.name, 'Muster Landtechnik GmbH'); assert.equal(co.app_name, 'Muster CRM'); assert.equal(co.logo_url, '');
+    co = await call('a', 'PUT', '/api/company', { street: 'Feldweg 2', zip_city: '12345 Musterdorf', phone: '01234 567', email: 'info@muster.de', color: '#1f6f3a', website: 'muster.de' });
+    assert.equal(co.color, '#1f6f3a'); assert.equal(co.website, 'https://muster.de');
+    await call('a', 'PUT', '/api/company', { color: 'rot', name: '' }); // ungültig -> bleibt
+    assert.equal((await call('x', 'GET', '/api/company')).color, '#1f6f3a');
+    await assert.rejects(call('x', 'PUT', '/api/company', { name: 'Hack' }), /401/);
+    assert.equal((await fetch(base + '/firma/logo')).status, 404);
+    const logoPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+    const lr = await fetch(base + '/api/company/logo', { method: 'POST', headers: { 'X-Requested-With': 'crm', Cookie: jars.a, 'Content-Type': 'image/png' }, body: logoPng });
+    assert.equal(lr.status, 200); co = await lr.json(); assert.ok(co.logo_url.startsWith('/firma/logo'));
+    assert.equal((await fetch(base + co.logo_url)).headers.get('content-type'), 'image/png');
+    const bad = await fetch(base + '/api/company/logo', { method: 'POST', headers: { 'X-Requested-With': 'crm', Cookie: jars.a, 'Content-Type': 'image/svg+xml' }, body: '<svg/>' });
+    assert.equal(bad.status, 400);
+    const man = await (await fetch(base + '/manifest.webmanifest')).json();
+    assert.equal(man.name, 'Muster CRM'); assert.equal(man.theme_color, '#1f6f3a');
+    assert.ok((await (await fetch(base + '/firma/icon.svg')).text()).includes('>M</text>'));
     assert.equal(me.user.role, 'admin');
     const kollege = await call('a', 'POST', '/api/users', { name: 'Kai Kollege', email: 'kai@test.de', password: 'geheim123' });
     await call('k', 'POST', '/api/login', { email: 'kai@test.de', password: 'geheim123' });
@@ -453,9 +471,13 @@ const U = require('../lib/util');
     assert.equal((await (await fetch(base + '/boerse/machines.json')).json()).machines.find((x) => x.id === um1.id).price_gross, 32725);
     const fr = await fetch(base + `/boerse/foto/${ph.id}`); assert.equal(fr.status, 200); assert.equal(await fr.text(), 'jpgdata');
     const bp = await fetch(base + '/boerse/'); assert.ok(!bp.headers.get('x-frame-options'));
-    assert.ok((await bp.text()).includes('Weidemann 1390'));
+    const bpt = await bp.text();
+    assert.ok(bpt.includes('Weidemann 1390') && bpt.includes('Muster Landtechnik GmbH') && bpt.includes('#1f6f3a') && !bpt.includes('Bussmann'));
+    assert.equal((await (await fetch(base + '/boerse/machines.json')).json()).company.city, '12345 Musterdorf');
+    const exM = await call('a', 'GET', `/api/used/${um1.id}/expose.html`);
+    assert.ok(exM.includes('Muster Landtechnik GmbH') && exM.includes('Tel. 01234 567') && !exM.includes('Havixbeck') && !exM.includes('#c0292f'));
     assert.ok((await (await fetch(base + `/boerse/m/${um1.id}?embed=1`)).text()).includes('32.725 €'));
-    assert.ok((await (await fetch(base + '/boerse/embed.js')).text()).includes('bussmann-boerse'));
+    assert.ok((await (await fetch(base + '/boerse/embed.js')).text()).includes('crm-boerse'));
     assert.equal((await fetch(base + `/boerse/m/${um2.id}`)).status, 404);
     // gebrauchter Einkauf -> automatisch im Lager; Verkauf -> verkauft; Verkauf gelöscht -> wieder verfügbar
     const ekU = await call('a', 'POST', '/api/sales', { kind: 'einkauf', date: U.today(), condition: 'gebraucht', category: 'Traktor', brand: 'Fendt', model: '310', purchase_price: '25.000', party: 'Händler X' });

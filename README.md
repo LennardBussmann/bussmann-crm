@@ -61,6 +61,18 @@ Das Skript installiert Docker, startet das CRM mit automatischem HTTPS-Zertifika
 
 Es genügt, den Ordner `data/` regelmäßig zu sichern. Er enthält `crm.sqlite` und die hochgeladenen Dateien.
 
+## Für eine andere Firma einrichten
+
+Firmenname, Logo, Farbe, Adresse und Kontaktdaten sind nicht fest im Programm, sondern stehen unter **Einstellungen → Firma**.
+Sie erscheinen in der Oberfläche, auf der Anmeldeseite, in der Maschinenbörse, in Exposés, Berichten (PDF), E-Mails und im Kalender-Abo.
+
+1. Eigenen Server einrichten wie oben unter *Schnellinstallation* beschrieben (eine Installation pro Firma, eigene Datenbank).
+2. Beim ersten Aufruf fragt die Ersteinrichtung nach dem **Namen der Firma** und legt den Administrator an.
+3. Unter **Einstellungen → Firma** Logo hochladen, Farbe wählen und Adresse eintragen.
+
+Ohne Logo zeigt das CRM den Firmennamen als Schriftzug; das App-Symbol ist dann der Anfangsbuchstabe in der Firmenfarbe.
+Die Saison-Aktionen und Beispieltexte sind auf Land- und Gartentechnik zugeschnitten und lassen sich unter *Aktionen* anpassen.
+
 ## E-Mail-Versand einrichten
 
 Einstellungen → E-Mail-Versand (SMTP), nur für Administratoren sichtbar. Für Microsoft 365 bzw. Outlook.com:
