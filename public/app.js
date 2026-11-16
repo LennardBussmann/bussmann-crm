@@ -2530,10 +2530,17 @@ async function viewTasks(main) {
     if (st.status === 'open') {
       const t = todayISO(); const tm = addDays(t, 1); const wk = addDays(t, 7);
       const groups = [['Überfällig', rows.filter((r) => r.due_date < t), 'red'], ['Heute', rows.filter((r) => r.due_date === t)], ['Morgen', rows.filter((r) => r.due_date === tm)], ['Nächste 7 Tage', rows.filter((r) => r.due_date > tm && r.due_date <= wk)], ['Später', rows.filter((r) => r.due_date > wk)]];
-      html = groups.filter((g) => g[1].length).map(([n, list, cls]) => `<div class="group-title ${cls || ''}">${n} (${list.length})</div><ul class="tasklist">${list.map((r) => taskItem(r, { showAssignee: showA })).join('')}</ul>`).join('');
+      let folded = { 'Später': true };
+      try { folded = { ...folded, ...JSON.parse(localStorage.getItem('taskFold') || '{}') }; } catch { /* egal */ }
+      html = groups.filter((g) => g[1].length).map(([n, list, cls]) => `<button type="button" class="group-title fold ${cls || ''} ${folded[n] ? 'closed' : ''}" data-fold="${n}" aria-expanded="${!folded[n]}"><span class="fold-arrow">▾</span>${n} (${list.length})</button><ul class="tasklist" ${folded[n] ? 'hidden' : ''}>${list.map((r) => taskItem(r, { showAssignee: showA })).join('')}</ul>`).join('');
     } else html = rows.length ? `<ul class="tasklist">${rows.map((r) => taskItem(r, { showAssignee: showA })).join('')}</ul>` : '';
     $('#t-list').innerHTML = html || '<div class="empty">Keine Aufgaben gefunden</div>';
     bindTaskList($('#t-list'), load);
+    $$('[data-fold]', $('#t-list')).forEach((h) => h.onclick = () => {
+      const closed = h.classList.toggle('closed'); h.nextElementSibling.hidden = closed; h.setAttribute('aria-expanded', String(!closed));
+      let f = {}; try { f = JSON.parse(localStorage.getItem('taskFold') || '{}'); } catch { /* egal */ }
+      f[h.dataset.fold] = closed; try { localStorage.setItem('taskFold', JSON.stringify(f)); } catch { /* egal */ }
+    });
   };
   $('#t-q').oninput = debounce((e) => { st.q = e.target.value; load(); });
   $('#t-scope').onchange = (e) => { st.scope = e.target.value; sessionStorage.setItem('tScope', st.scope); load(); };

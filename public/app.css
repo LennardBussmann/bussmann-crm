@@ -189,6 +189,10 @@ table.list td.name { font-weight: 800; }
 .tasklist .due.today { color: var(--warn); font-weight: 800; }
 .group-title { padding: 8px 14px; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); background: var(--surface-2); border-bottom: 1px solid var(--line); }
 .group-title.red { color: var(--red); }
+.group-title.fold { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; border-bottom: 1px solid var(--line); text-align: left; cursor: pointer; font-family: inherit; }
+.group-title.fold:hover { filter: brightness(.97); }
+.fold-arrow { display: inline-block; transition: transform .15s; }
+.group-title.closed .fold-arrow { transform: rotate(-90deg); }
 .bdays li { cursor: pointer; }
 .bday-ico { width: 34px; height: 34px; border-radius: 50%; background: #fce8f1; color: #c2185b; display: flex; align-items: center; justify-content: center; flex: none; font-size: 17px; }
 
