@@ -187,7 +187,7 @@ const brutto = (n) => (n == null ? null : Math.round(n * (1 + VAT) * 100) / 100)
 const vatMode = () => { try { return localStorage.getItem('vatMode') === 'b' ? 'b' : 'n'; } catch { return 'n'; } };
 const NATIVE_VALUE = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
 function vatFields(root) {
-  const inputs = $$('.money input', root);
+  const inputs = $$('.money:not(.plain) input', root);
   if (!inputs.length) return;
   let mode = vatMode();
   const conv = (raw, toNet) => { const n = parseEur(raw); if (n == null) return raw; return eur2(Math.round((toNet ? n / (1 + VAT) : n * (1 + VAT)) * 100) / 100); };
@@ -1725,7 +1725,7 @@ async function viewUsed(main, sub) {
     const d = await api('/used?' + new URLSearchParams({ status: st.status, category: st.category, condition: st.cond, q: st.q }));
     const s = d.stats;
     $('#u-scount').textContent = s.searches || '';
-    $('#u-kpis').innerHTML = [['Im Lager', s.count], ['Lagerwert (EK)', eur(s.ek) || '0 €'], ['Angebotswert', eur(s.vk) || '0 €'], ['Ø Standzeit', s.avg_days == null ? '–' : s.avg_days + ' Tage'], ['Länger als 180 Tage', s.old, s.old > 0], ['Offene Suchaufträge', s.searches]]
+    $('#u-kpis').innerHTML = [['Im Lager', s.count], ['Lagerwert (Einstand)', eur(s.ek) || '0 €'], ['Angebotswert', eur(s.vk) || '0 €'], ['Ø Standzeit', s.avg_days == null ? '–' : s.avg_days + ' Tage'], ['Länger als 180 Tage', s.old, s.old > 0], ['Offene Suchaufträge', s.searches]]
       .map(([l, v, a]) => `<div class="kpi ${a ? 'alert' : ''}"><div class="l">${l}</div><div class="v">${v}</div></div>`).join('');
     if (!$('#u-status')) {
       $('#u-bar').innerHTML = `<div class="grow"><span class="ico">${icon('search')}</span><input type="search" id="u-q" placeholder="Suchen: Marke, Modell, Ausstattung, Seriennr. …"></div>
@@ -1743,9 +1743,9 @@ async function viewUsed(main, sub) {
           ${m.matches ? `<div class="small"><span class="chip ok">${icon('user')} ${m.matches} Suchauftrag${m.matches > 1 ? 'e' : ''} passt</span></div>` : ''}</td>
         <td class="hide-m small">${esc(m.location || '')}<div class="muted">${esc(m.origin || '')}${m.customer_name ? ' · ' + esc(m.customer_name) : ''}</div></td>
         <td class="num nowrap"><span class="pct ${standCls(m.days)}">${m.days ?? '–'} Tage</span><div class="muted small">seit ${deDate(m.in_date)}</div></td>
-        <td class="num hide-m">${m.purchase_price != null ? eur(m.purchase_price) : '<span class="muted small">–</span>'}</td>
+        <td class="num hide-m">${m.cost_total != null ? eur(m.cost_total) : '<span class="muted small">–</span>'}${m.extra_costs ? `<div class="muted small nowrap">inkl. ${eur(m.extra_costs)} Zusatzk.</div>` : ''}</td>
         <td class="num"><b>${m.asking_price != null ? eur(m.asking_price) : '<span class="muted small">offen</span>'}</b>${bruttoHint(m.asking_price)}</td>
-        <td class="num hide-m">${m.margin != null ? eur(m.margin) : ''}</td>
+        <td class="num hide-m">${m.margin != null ? eur(m.margin) : ''}${m.margin_pct != null ? `<div class="muted small">${String(m.margin_pct).replace('.', ',')} %</div>` : ''}</td>
         <td><span class="ustat ${m.status}">${USED_STATUS[m.status]}</span>${m.status === 'verkauft' && m.sold_date ? `<div class="muted small">${deDate(m.sold_date)}</div>` : ''}</td></tr>`).join('')}</tbody></table>`
       : `<div class="empty">${st.q || st.status || st.category ? 'Keine Maschinen für diesen Filter.' : 'Noch keine Maschinen im Lager. Einkäufe und Inzahlungnahmen landen automatisch hier – oder mit „Maschine aufnehmen“ selbst anlegen.'}</div>`;
     $$('#u-list tr[data-uid]').forEach((tr) => tr.onclick = () => openUsedForm(Number(tr.dataset.uid), loadLager));
@@ -1816,8 +1816,20 @@ async function openUsedForm(id, onSaved) {
       <div class="field full homepage-box"><label class="check"><input type="checkbox" name="public" ${m.public ? 'checked' : ''}> <b>Auf der Homepage zeigen</b> (Maschinenbörse)</label>
         <label class="check"><input type="checkbox" name="show_price" ${m.show_price === 0 ? '' : 'checked'}> Preis anzeigen <span class="muted">(sonst „Preis auf Anfrage“)</span></label>
         <div class="small muted">Gezeigt werden Fotos, Daten, Ausstattung, Beschreibung und Wunschpreis. EK, Notizen, Vorbesitzer, Seriennummer und Standort bleiben intern. Verkaufte Maschinen verschwinden automatisch.${m.public && m.status !== 'verkauft' ? ` <a href="/boerse/m/${m.id}" target="_blank" rel="noopener">Auf der Börse ansehen ↗</a>` : ''}</div></div>
-      <div class="field"><label>Einkaufspreis netto (EK)</label><div class="money"><input type="text" inputmode="decimal" name="purchase_price" value="${eur2(m.purchase_price)}" placeholder="0,00"><span>€</span></div></div>
+      <div class="field"><label>Einkaufspreis Maschine netto (EK)</label><div class="money"><input type="text" inputmode="decimal" name="purchase_price" value="${eur2(m.purchase_price)}" placeholder="0,00"><span>€</span></div></div>
       <div class="field"><label>Wunschpreis netto (VK)</label><div class="money"><input type="text" inputmode="decimal" name="asking_price" value="${eur2(m.asking_price)}" placeholder="0,00"><span>€</span></div></div>
+      <div class="field full calc-box">
+        <label>Zusatzkosten <span class="muted">(netto – z. B. Fracht, Zubehör, Montage, Aufbereitung)</span></label>
+        <div id="uf-costs"></div>
+        <div class="cost-add">${['Fracht', 'Zubehör', 'Montage', 'Aufbereitung', 'Überführung'].map((l) => `<button type="button" class="btn sm" data-cadd="${l}">${icon('plus')} ${l}</button>`).join('')}<button type="button" class="btn sm" data-cadd="">${icon('plus')} Sonstiges</button></div>
+        <div class="calc-sum" id="uf-sum"></div>
+        <div class="markup"><span><b>Wunschpreis berechnen:</b> Aufschlag</span>
+          <div class="money plain pct-in"><input type="text" inputmode="decimal" name="markup_pct" value="${m.markup_pct != null ? String(m.markup_pct).replace('.', ',') : ''}" placeholder="10"><span>%</span></div>
+          ${[5, 10, 15, 20].map((p) => `<button type="button" class="btn sm" data-pct="${p}">${p} %</button>`).join('')}
+          <button type="button" class="btn sm primary" id="uf-apply">Als Wunschpreis übernehmen</button>
+        </div>
+        <div class="small muted" id="uf-markup-hint"></div>
+      </div>
       <div class="field"><label>Im Lager seit</label><input type="date" name="in_date" value="${esc(m.in_date || todayISO())}"></div>
       <div class="field"><label>Status</label><select name="status">${Object.entries(USED_STATUS).map(([k, v]) => `<option value="${k}" ${m.status === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
       <div class="field"><label>Herkunft</label><input type="text" name="origin" value="${esc(m.origin || '')}" placeholder="z. B. Inzahlungnahme, Ankauf"></div>
@@ -1849,7 +1861,36 @@ async function openUsedForm(id, onSaved) {
     $$('[data-view]', box).forEach((im) => im.onclick = () => window.open(im.src, '_blank'));
   };
   drawPhotos();
-  const body = () => ({ ...formData(f), customer_id: picker.get() });
+  // Zusatzkosten und Aufschlag
+  let costs = (m.costs || []).map((c) => ({ ...c }));
+  const costBox = $('#uf-costs', md.el);
+  const pct0 = (n) => String(Math.round(n * 10) / 10).replace('.', ',');
+  const calc = () => {
+    const ek = parseEur(f.purchase_price.value) || 0;
+    const extra = costs.reduce((n, c) => n + (parseEur(c.amount) || 0), 0);
+    const total = Math.round((ek + extra) * 100) / 100;
+    const vk = parseEur(f.asking_price.value);
+    $('#uf-sum', md.el).innerHTML = extra ? `Einkaufspreis ${eur2(ek)} € + Zusatzkosten ${eur2(extra)} € = <b>Einstandspreis ${eur2(total)} € netto</b>` : `<b>Einstandspreis ${eur2(total)} € netto</b>`;
+    const p = parseEur(f.markup_pct.value);
+    const target = p != null && total ? Math.round(total * (1 + p / 100)) : null;
+    const now = vk != null && total ? `Aktueller Wunschpreis: ${vk >= total ? '+' : ''}${eur2(vk - total)} € (${pct0(((vk - total) / total) * 100)} %) auf den Einstandspreis.` : '';
+    $('#uf-markup-hint', md.el).innerHTML = [target != null ? `Mit ${pct0(p)} % Aufschlag: <b>${eur2(target)} € netto</b> (${eur2(Math.round(target * (1 + VAT) * 100) / 100)} € brutto)` : '', now].filter(Boolean).join(' · ');
+    $('#uf-apply', md.el).disabled = target == null;
+    return { total, target };
+  };
+  const drawCosts = () => {
+    costBox.innerHTML = costs.map((c, i) => `<div class="cost-row"><input type="text" data-cl="${i}" value="${esc(c.label || '')}" placeholder="Bezeichnung"><div class="money plain"><input type="text" inputmode="decimal" data-ca="${i}" value="${c.amount === '' || c.amount == null ? '' : esc(typeof c.amount === 'number' ? eur2(c.amount) : c.amount)}" placeholder="0,00"><span>€</span></div><button type="button" class="btn ghost icon" data-cdel="${i}" title="Entfernen">${icon('trash')}</button></div>`).join('');
+    $$('[data-cl]', costBox).forEach((el) => el.oninput = () => { costs[el.dataset.cl].label = el.value; });
+    $$('[data-ca]', costBox).forEach((el) => el.oninput = () => { costs[el.dataset.ca].amount = el.value; calc(); });
+    $$('[data-cdel]', costBox).forEach((b) => b.onclick = () => { costs.splice(Number(b.dataset.cdel), 1); drawCosts(); calc(); });
+  };
+  $$('[data-cadd]', md.el).forEach((b) => b.onclick = () => { costs.push({ label: b.dataset.cadd, amount: '' }); drawCosts(); const inp = $(`[data-${b.dataset.cadd ? 'ca' : 'cl'}="${costs.length - 1}"]`, costBox); if (inp) inp.focus(); calc(); });
+  $$('[data-pct]', md.el).forEach((b) => b.onclick = () => { f.markup_pct.value = b.dataset.pct; calc(); });
+  $('#uf-apply', md.el).onclick = () => { const { target } = calc(); if (target == null) return; f.asking_price.value = eur2(target); calc(); toast('Wunschpreis übernommen'); };
+  ['purchase_price', 'asking_price', 'markup_pct'].forEach((n) => f[n].addEventListener('input', calc));
+  $$('.vat-tg button', md.el).forEach((b) => b.addEventListener('click', () => setTimeout(calc, 0)));
+  drawCosts(); calc();
+  const body = () => ({ ...formData(f), customer_id: picker.get(), costs: costs.filter((c) => parseEur(c.amount) != null).map((c) => ({ label: c.label, amount: parseEur(c.amount) })) });
   $('#uf-save', md.el).onclick = async () => {
     try {
       if (isEdit) {
@@ -1880,7 +1921,7 @@ async function openUsedForm(id, onSaved) {
     const x = body();
     try { await api('/used/' + m.id, { method: 'PUT', body: x }); } catch (e) { fail(e); return; }
     md.close();
-    openSaleForm({ kind: 'verkauf', used_id: m.id, category: x.category, brand: x.brand, model: x.model, serial: x.serial, year: x.year, condition: x.condition, purchase_id: m.purchase_id, purchase_price: parseEur(x.purchase_price), sale_price: parseEur(x.asking_price), notes: `Lagermaschine Nr. G-${m.id}` }, onSaved);
+    openSaleForm({ kind: 'verkauf', used_id: m.id, category: x.category, brand: x.brand, model: x.model, serial: x.serial, year: x.year, condition: x.condition, purchase_id: m.purchase_id, purchase_price: parseEur(x.purchase_price), extra_costs: x.costs.reduce((n, c) => n + c.amount, 0) || null, sale_price: parseEur(x.asking_price), notes: [`Lagermaschine Nr. G-${m.id}`, x.costs.length ? 'Zusatzkosten: ' + x.costs.map((c) => `${c.label} ${eur2(c.amount)} €`).join(', ') : ''].filter(Boolean).join('\n') }, onSaved);
   };
 }
 

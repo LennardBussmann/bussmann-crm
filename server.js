@@ -667,7 +667,7 @@ function syncProjectSale(id, oldStatus, userId) {
     const um = p.used_id ? get(`SELECT * FROM used_machines WHERE id=? AND status<>'verkauft'`, p.used_id) : null; // Gebrauchte aus dem Lager
     const base = { date, user_id: p.user_id, customer_id: p.customer_id, party: p.customer_id ? '' : [p.kunde, p.ort].filter(Boolean).join(', '), condition: um ? um.condition : 'neu', category: p.typ || (um && um.category) || null, brand: p.brand || null, model: p.modell || null, serial: um ? um.serial : null, year: um ? um.year : null, extra_costs: 0, purchase_id: null };
     const ins = (s) => Number(run(`INSERT INTO sales(${SALE_FIELDS.join(',')}, project_id, created_by) VALUES(${SALE_FIELDS.map(() => '?').join(',')}, ?, ?)`, ...SALE_FIELDS.map((f) => s[f] ?? null), id, userId).lastInsertRowid);
-    const sid = ins({ ...base, kind: 'verkauf', purchase_price: um ? um.purchase_price : null, purchase_id: um ? um.purchase_id : null, sale_price: p.preis ?? 0,
+    const sid = ins({ ...base, kind: 'verkauf', purchase_price: um ? um.purchase_price : null, extra_costs: um ? usedCalc(um).extra_costs : 0, purchase_id: um ? um.purchase_id : null, sale_price: p.preis ?? 0,
       notes: [`Aus Verkaufsprojekt Nr. ${p.id}`, um ? `Lagermaschine Nr. G-${um.id}` : '', p.ausstattung ? `Ausstattung: ${p.ausstattung}` : '', p.finanzierung !== 'Offen' ? `Finanzierung: ${p.finanzierung}` : '', p.inzahlung ? `Inzahlungnahme: ${p.inzahlung}${p.inz_wert != null ? ' (' + p.inz_wert.toLocaleString('de-DE') + ' €)' : ''}` : ''].filter(Boolean).join('\n') });
     const mid = machineFromSale({ ...base, kind: 'verkauf' }, userId);
     if (mid) run('UPDATE sales SET machine_id=? WHERE id=?', mid, sid);
@@ -1157,17 +1157,34 @@ app.delete('/api/sales/:id', auth, (req, res) => {
 
 // ---------- Gebrauchtmaschinen-Lager & Suchaufträge ----------
 const USED_STATUS = { verfuegbar: 'Verfügbar', reserviert: 'Reserviert', verkauft: 'Verkauft' };
-const USED_FIELDS = ['category', 'brand', 'model', 'serial', 'year', 'hours', 'condition', 'equipment', 'description', 'purchase_price', 'asking_price', 'location', 'status', 'in_date', 'origin', 'customer_id', 'user_id', 'notes', 'public', 'show_price'];
+const USED_FIELDS = ['category', 'brand', 'model', 'serial', 'year', 'hours', 'condition', 'equipment', 'description', 'purchase_price', 'asking_price', 'location', 'status', 'in_date', 'origin', 'customer_id', 'user_id', 'notes', 'public', 'show_price', 'costs', 'markup_pct'];
 const USED_SQL = `SELECT m.*, u.name user_name, ${CUST_LABEL_SQL} customer_name,
   (SELECT id FROM used_photos f WHERE f.used_id=m.id ORDER BY sort, id LIMIT 1) photo_id,
   (SELECT COUNT(*) FROM used_photos f WHERE f.used_id=m.id) photo_count
   FROM used_machines m LEFT JOIN users u ON u.id=m.user_id LEFT JOIN customers c ON c.id=m.customer_id`;
+/** Zusatzkosten (Fracht, Zubehör, Montage …) als Liste [{label, amount}] */
+const parseCosts = (v) => { if (Array.isArray(v)) return v; try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
+const r2 = (n) => Math.round(n * 100) / 100;
 const usedCalc = (m) => {
   const end = m.status === 'verkauft' && m.sold_date ? m.sold_date : U.today();
   const days = m.in_date ? Math.max(0, Math.round((new Date(end) - new Date(m.in_date)) / 864e5)) : null;
-  const margin = m.asking_price != null && m.purchase_price != null ? Math.round((m.asking_price - m.purchase_price) * 100) / 100 : null;
-  return { ...m, days, margin, title: [m.brand, m.model].filter(Boolean).join(' ') || m.category || 'Maschine' };
+  const costs = parseCosts(m.costs);
+  const extra = r2(costs.reduce((n, c) => n + (Number(c.amount) || 0), 0));
+  // Einstandspreis = EK der Maschine + Zusatzkosten
+  const cost_total = m.purchase_price != null ? r2(m.purchase_price + extra) : (extra ? extra : null);
+  const margin = m.asking_price != null && cost_total != null ? r2(m.asking_price - cost_total) : null;
+  const margin_pct = margin != null && cost_total ? Math.round((margin / cost_total) * 1000) / 10 : null;
+  return { ...m, costs, extra_costs: extra, cost_total, days, margin, margin_pct, title: [m.brand, m.model].filter(Boolean).join(' ') || m.category || 'Maschine' };
 };
+function cleanCosts(v) {
+  const out = [];
+  for (const c of parseCosts(v).slice(0, 30)) {
+    const amount = money(c && c.amount);
+    if (amount == null || Number.isNaN(amount)) continue;
+    out.push({ label: U.str(c.label, 80) || 'Zusatzkosten', amount });
+  }
+  return out;
+}
 const intOrNull = (v, lo, hi) => { const n = Number(String(v ?? '').replace(/\./g, '')); return v !== '' && v != null && Number.isInteger(n) && n >= lo && n <= hi ? n : null; };
 const flag = (v) => v === true || v === 1 || v === '1' || v === 'on' || v === 'true';
 function cleanUsed(b, user) {
@@ -1183,6 +1200,8 @@ function cleanUsed(b, user) {
     user_id: b.user_id && get('SELECT id FROM users WHERE id=?', b.user_id) ? Number(b.user_id) : user.id,
     notes: U.str(b.notes, 5000) || '',
     public: flag(b.public) ? 1 : 0, show_price: b.show_price === undefined || flag(b.show_price) ? 1 : 0,
+    costs: JSON.stringify(cleanCosts(b.costs)),
+    markup_pct: (() => { const n = money(b.markup_pct); return n == null || Number.isNaN(n) || n < -100 || n > 1000 ? null : n; })(),
   };
   if (Number.isNaN(m.purchase_price) || Number.isNaN(m.asking_price)) return { error: 'Bitte Preise als Zahl eingeben' };
   if (!m.category && !m.brand && !m.model) return { error: 'Bitte mindestens Art, Marke oder Modell angeben' };
@@ -1250,7 +1269,7 @@ app.get('/api/used', auth, (req, res) => {
   res.json({
     rows, statuses: USED_STATUS,
     categories: all("SELECT DISTINCT category FROM used_machines WHERE category IS NOT NULL AND category<>'' ORDER BY category").map((r) => r.category),
-    stats: { count: stock.length, ek: sum('purchase_price'), vk: sum('asking_price'), avg_days: stock.length ? Math.round(sum('days') / stock.length) : null, old: stock.filter((r) => r.days > 180).length, searches: get("SELECT COUNT(*) n FROM searches WHERE status='offen'").n },
+    stats: { count: stock.length, ek: sum('cost_total'), vk: sum('asking_price'), avg_days: stock.length ? Math.round(sum('days') / stock.length) : null, old: stock.filter((r) => r.days > 180).length, searches: get("SELECT COUNT(*) n FROM searches WHERE status='offen'").n },
   });
 });
 app.get('/api/used/:id', auth, (req, res) => {

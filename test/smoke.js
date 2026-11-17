@@ -434,6 +434,21 @@ const U = require('../lib/util');
     const nBefore = (await call('k', 'GET', '/api/notifications')).length;
     const st0 = (await call('a', 'GET', '/api/used')).stats;
     const um1 = await call('a', 'POST', '/api/used', { category: 'Hoftrac', brand: 'Weidemann', model: '1390', year: 2018, hours: '2.300', purchase_price: '18.000', asking_price: '26.900', in_date: U.addDays(U.today(), -200) });
+    {
+      // Zusatzkosten (Fracht, Zubehör …) und Aufschlag
+      const cm = await call('a', 'POST', '/api/used', { category: 'Mähroboter', brand: 'Husqvarna', model: 'Test 450X', condition: 'neu', purchase_price: '2.000', markup_pct: '12,5',
+        costs: [{ label: 'Fracht', amount: '150' }, { label: 'Montage', amount: 50.5 }, { label: 'leer', amount: '' }, { label: '', amount: '10' }], asking_price: '2.600' });
+      let cr = await call('a', 'GET', `/api/used/${cm.id}`);
+      assert.equal(cr.costs.length, 3); assert.equal(cr.costs[2].label, 'Zusatzkosten');
+      assert.equal(cr.extra_costs, 210.5); assert.equal(cr.cost_total, 2210.5); assert.equal(cr.margin, 389.5); assert.equal(cr.markup_pct, 12.5);
+      await call('a', 'PUT', `/api/used/${cm.id}`, { notes: 'x' }); // Kosten bleiben beim Speichern ohne Liste erhalten
+      cr = await call('a', 'GET', `/api/used/${cm.id}`); assert.equal(cr.extra_costs, 210.5);
+      const lst = (await call('a', 'GET', '/api/used')).rows.find((r) => r.id === cm.id);
+      assert.equal(lst.cost_total, 2210.5);
+      const pubC = await (await fetch(base + '/boerse/machines.json')).json();
+      assert.ok(!JSON.stringify(pubC).includes('Fracht'));
+      await call('a', 'DELETE', `/api/used/${cm.id}`);
+    }
     assert.equal(um1.hits, 1); // passt zu sr1, nicht zu srOther
     const nk = await call('k', 'GET', '/api/notifications');
     assert.equal(nk.length, nBefore + 1); assert.match(nk[0].text, /Weidemann 1390/); assert.equal(nk[0].link, `#/gebrauchte/${um1.id}`);

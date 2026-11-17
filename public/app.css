@@ -576,3 +576,12 @@ tr.click { cursor: pointer; }
 .login .logo .logo-text { font-size: 30px; display: block; margin-bottom: 4px; }
 .co-logo { min-height: 48px; display: flex; align-items: center; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
 .co-logo img { max-height: 56px; max-width: 240px; display: block; }
+
+/* Zusatzkosten und Aufschlag-Rechner (Maschinen) */
+.calc-box { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+.cost-row { display: grid; grid-template-columns: 1fr 150px auto; gap: 8px; align-items: center; margin-bottom: 6px; }
+.cost-add { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 10px; }
+.calc-sum { padding: 8px 0; border-top: 1px dashed var(--line-strong); border-bottom: 1px dashed var(--line-strong); margin-bottom: 10px; }
+.markup { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.markup .pct-in { width: 90px; }
+@media (max-width: 640px) { .cost-row { grid-template-columns: 1fr 110px auto; } }
