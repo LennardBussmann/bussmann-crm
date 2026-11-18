@@ -470,6 +470,16 @@ const U = require('../lib/util');
       await call('a', 'DELETE', `/api/customers/${cOff}`);
     }
     {
+      // Eingangsrechnung: ohne KI-Schlüssel nur Hinweis; Umwandlung der KI-Antwort
+      const ir = await fetch(base + '/api/used/parse-invoice', { method: 'POST', headers: { 'X-Requested-With': 'crm', Cookie: jars.a, 'Content-Type': 'application/pdf' }, body: Buffer.from('%PDF-1.4 x') });
+      assert.deepEqual(await ir.json(), { ai: false, error: 'no_ai' });
+      const ir2 = await fetch(base + '/api/used/parse-invoice', { method: 'POST', headers: { 'X-Requested-With': 'crm', Cookie: jars.a, 'Content-Type': 'text/plain' }, body: 'x' });
+      assert.equal(ir2.status, 400);
+      const tf = require('../lib/invoice').toMachineFields({ lieferant: 'Weidemann GmbH', rechnung_nr: 'R-1', rechnung_datum: '2026-11-10', maschinentyp: 'Hoftrac', marke: 'Weidemann', modell: '1390', seriennummer: 'S1', baujahr: 2026, betriebsstunden: 0, zustand: 'neu', ausstattung: ['Kabine', ' Palettengabel '], preis_maschine_netto: 30000.004, zusatzkosten: [{ bezeichnung: 'Fracht', betrag_netto: 450 }, { bezeichnung: 'Leer', betrag_netto: 0 }], summe_netto: 30450, hinweise: 'Zahlbar 30 Tage' }, (v) => /^\d{4}-\d\d-\d\d$/.test(v || ''));
+      assert.equal(tf.equipment, 'Kabine\nPalettengabel'); assert.equal(tf.purchase_price, 30000); assert.deepEqual(tf.costs, [{ label: 'Fracht', amount: 450 }]);
+      assert.equal(tf.in_date, '2026-11-10'); assert.equal(tf.origin, 'Neu von Weidemann GmbH'); assert.match(tf.notes, /Rechnung Nr\. R-1 vom 10\.11\.2026/);
+    }
+    {
       // Zusatzkosten (Fracht, Zubehör …) und Aufschlag
       const cm = await call('a', 'POST', '/api/used', { category: 'Mähroboter', brand: 'Husqvarna', model: 'Test 450X', condition: 'neu', purchase_price: '2.000', markup_pct: '12,5',
         costs: [{ label: 'Fracht', amount: '150' }, { label: 'Montage', amount: 50.5 }, { label: 'leer', amount: '' }, { label: '', amount: '10' }], asking_price: '2.600' });

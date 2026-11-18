@@ -1823,6 +1823,13 @@ async function openUsedForm(id, onSaved) {
     onClose: () => { if (changed && onSaved) onSaved(); },
     body: `<form id="uf"><div class="form-grid">
       ${isEdit ? `<div class="full"><div class="photo-strip" id="uf-photos"></div></div>` : ''}
+      <div class="full offer-drop" id="uf-inv" tabindex="0" role="button">
+        <input type="file" accept="application/pdf,image/*" hidden>
+        <div class="offer-ico">${icon('file', 'lg')}</div>
+        <div><b>Eingangsrechnung hochladen</b> <span class="muted">(PDF oder Foto)</span>
+          <div class="small muted">Maschine, Ausstattung, Einkaufspreis und Zusatzkosten (Fracht, Zubehör, Montage …) werden ausgelesen und unten eingetragen.</div></div>
+      </div>
+      <div class="full" id="uf-inv-msg"></div>
       ${isEdit && m.searches.length ? `<div class="full callout ok">${icon('user')} <b>Passt zu ${m.searches.length} Suchauftrag${m.searches.length > 1 ? 'en' : ''}:</b> ${m.searches.map((s) => `<div class="small" style="margin-top:4px">${s.customer_id ? `<a href="#/kunden/${s.customer_id}">${esc(s.kunde_name)}</a>` : esc(s.kunde_name)}${s.kunde_ort ? ', ' + esc(s.kunde_ort) : ''}${s.kunde_tel ? ` · <a href="${telHref(s.kunde_tel)}">${esc(s.kunde_tel)}</a>` : ''} – sucht ${esc(s.title)}${s.max_price != null ? ' bis ' + eur(s.max_price) : ''} <span class="muted">(${esc(s.user_name || '')})</span> <button type="button" class="btn sm" data-sproj="${s.id}">${icon('target')} ${s.project_id ? 'Im Projekt Nr. ' + s.project_id + ' anbieten' : 'Verkaufsprojekt anlegen'}</button></div>`).join('')}</div>` : ''}
       <div class="sec full">Maschine</div>
       <div class="field"><label>Maschinenart</label><input type="text" name="category" list="uf-cats" value="${esc(m.category || '')}" placeholder="z. B. Hoftrac"><datalist id="uf-cats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></div>
@@ -1913,6 +1920,48 @@ async function openUsedForm(id, onSaved) {
   ['purchase_price', 'asking_price', 'markup_pct'].forEach((n) => f[n].addEventListener('input', calc));
   $$('.vat-tg button', md.el).forEach((b) => b.addEventListener('click', () => setTimeout(calc, 0)));
   drawCosts(); calc();
+  // Eingangsrechnung auslesen
+  const invDrop = $('#uf-inv', md.el); const invIn = $('input[type=file]', invDrop); const invMsg = $('#uf-inv-msg', md.el);
+  const mark = (el) => { el.classList.add('ai-filled'); el.addEventListener('input', () => el.classList.remove('ai-filled'), { once: true }); };
+  const applyInvoice = (x) => {
+    const filled = [];
+    const set = (name, v, label, overwrite = true) => {
+      if (v == null || v === '') return;
+      const el = f[name]; if (!el || (!overwrite && el.value.trim())) return;
+      el.value = v; mark(el); if (label) filled.push(label);
+    };
+    set('category', x.category, 'Maschinenart'); set('brand', x.brand, 'Marke'); set('model', x.model, 'Modell'); set('serial', x.serial, 'Seriennummer');
+    set('year', x.year, 'Baujahr'); set('hours', x.hours, 'Betriebsstunden');
+    if (USED_COND[x.condition]) set('condition', x.condition, 'Zustand');
+    if (x.equipment) { const old = f.equipment.value.trim(); f.equipment.value = old ? old + '\n' + x.equipment : x.equipment; f.equipment.rows = Math.min(10, x.equipment.split('\n').length + 1); mark(f.equipment); filled.push('Ausstattung'); }
+    if (x.purchase_price != null) set('purchase_price', eur2(x.purchase_price), 'Einkaufspreis');
+    if (x.costs.length) { costs = [...costs.filter((c) => parseEur(c.amount) != null), ...x.costs]; drawCosts(); filled.push(x.costs.length === 1 ? 'Zusatzkosten' : x.costs.length + ' Zusatzkosten'); }
+    set('in_date', x.in_date, null); set('origin', x.origin, null, false);
+    if (x.notes) { f.notes.value = [f.notes.value.trim(), x.notes].filter(Boolean).join('\n'); }
+    calc();
+    const sum = (x.purchase_price || 0) + x.costs.reduce((n, c) => n + c.amount, 0);
+    const check = x.total != null && Math.abs(sum - x.total) > 1 ? `<div class="small" style="margin-top:4px">${icon('info')} Achtung: Rechnungssumme netto ${eur2(x.total)} €, ausgelesen wurden ${eur2(sum)} € – bitte Preise kurz vergleichen.</div>` : '';
+    invMsg.innerHTML = `<div class="callout ok">${icon('check')} Rechnung ausgelesen${filled.length ? ': ' + esc(filled.join(', ')) : ''}. Die gelb markierten Felder bitte kurz prüfen, dann speichern.${check}</div>`;
+  };
+  const handleInvoice = async (file) => {
+    if (!file) return;
+    if (!/^(application\/pdf|image\/)/.test(file.type)) { toast('Bitte ein PDF oder Foto auswählen', true); return; }
+    const up = await shrinkImage(file);
+    invDrop.classList.add('busy');
+    invMsg.innerHTML = `<div class="callout info"><span class="spin"></span> „${esc(file.name)}“ wird ausgewertet … das kann eine halbe Minute dauern.</div>`;
+    try {
+      const r = await api('/used/parse-invoice', { method: 'POST', raw: true, body: up, headers: { 'Content-Type': up.type, 'X-Filename': encodeURIComponent(up.name) } });
+      if (r.fields) applyInvoice(r.fields);
+      else if (r.error === 'no_ai') invMsg.innerHTML = `<div class="callout warn">${icon('info')} Für das Auslesen von Rechnungen wird die KI-Auswertung gebraucht.${state.me.role === 'admin' ? ' Einrichten unter <a href="#/einstellungen">Einstellungen → KI-Auswertung</a>.' : ' Bitte den Administrator, sie unter Einstellungen einzurichten.'}</div>`;
+      else invMsg.innerHTML = `<div class="callout warn">${icon('info')} ${esc(r.error || 'Die Rechnung konnte nicht ausgelesen werden – bitte die Felder von Hand ausfüllen.')}</div>`;
+    } catch (e) { invMsg.innerHTML = ''; fail(e); } finally { invDrop.classList.remove('busy'); invIn.value = ''; }
+  };
+  invDrop.onclick = (e) => { if (e.target === invIn || invDrop.classList.contains('busy')) return; invIn.click(); };
+  invDrop.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); invIn.click(); } };
+  invIn.onchange = () => handleInvoice(invIn.files[0]);
+  invDrop.ondragover = (e) => { e.preventDefault(); invDrop.classList.add('over'); };
+  invDrop.ondragleave = () => invDrop.classList.remove('over');
+  invDrop.ondrop = (e) => { e.preventDefault(); invDrop.classList.remove('over'); handleInvoice(e.dataTransfer.files[0]); };
   const body = () => ({ ...formData(f), customer_id: picker.get(), costs: costs.filter((c) => parseEur(c.amount) != null).map((c) => ({ label: c.label, amount: parseEur(c.amount) })) });
   $('#uf-save', md.el).onclick = async () => {
     try {

@@ -1280,6 +1280,25 @@ app.get('/api/used/:id', auth, (req, res) => {
   r.searches = all(`${SEARCH_SQL} WHERE s.status='offen'`).filter((s) => searchMatches(s, r)).map((s) => ({ id: s.id, kunde_name: s.kunde_name, kunde_ort: s.kunde_ort, kunde_tel: s.kunde_tel, customer_id: s.customer_id, title: searchTitle(s), max_price: s.max_price, user_name: s.user_name, project_id: s.project_id, project_status: s.project_status }));
   res.json(r);
 });
+/** Eingangsrechnung (Lieferant -> Händler) auslesen und das Maschinen-Formular vorbefüllen */
+const USED_TYPE_HINTS = ['Traktor', 'Kompakttraktor', 'Hoftrac', 'Radlader', 'Teleskoplader', 'Rasentraktor', 'Aufsitzmäher', 'Mähroboter', 'Kehrmaschine', 'Kommunaltraktor', 'Mähwerk', 'Anhänger'];
+app.post('/api/used/parse-invoice', auth, express.raw({ type: () => true, limit: '25mb' }), wrap(async (req, res) => {
+  if (!req.body || !req.body.length) return bad(res, 'Leere Datei');
+  const mime = String(req.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
+  if (!OFFER_TYPES.includes(mime)) return bad(res, 'Bitte die Rechnung als PDF oder Foto (JPG/PNG) hochladen');
+  const key = aiKey();
+  if (!key) return res.json({ ai: false, error: 'no_ai' });
+  const inv = require('./lib/invoice');
+  const brands = [...new Set([...PROJ_BRAND_HINTS, ...all("SELECT DISTINCT brand FROM used_machines WHERE brand<>''").map((r) => r.brand)])];
+  const types = [...new Set([...USED_TYPE_HINTS, ...all("SELECT DISTINCT category FROM used_machines WHERE category<>''").map((r) => r.category)])].slice(0, 30);
+  try {
+    const x = await inv.parseInvoice({ buffer: req.body, mime, apiKey: key, dealer: Co.company().name, brands, types });
+    res.json({ ai: true, fields: inv.toMachineFields(x, U.isDate) });
+  } catch (e) {
+    if (!(e instanceof offer.OfferError)) throw e;
+    res.json({ ai: true, error: e.message });
+  }
+}));
 app.post('/api/used', auth, (req, res) => {
   const { m, error } = cleanUsed(req.body || {}, req.user);
   if (error) return bad(res, error);
