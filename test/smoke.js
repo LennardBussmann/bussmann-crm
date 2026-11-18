@@ -435,6 +435,41 @@ const U = require('../lib/util');
     const st0 = (await call('a', 'GET', '/api/used')).stats;
     const um1 = await call('a', 'POST', '/api/used', { category: 'Hoftrac', brand: 'Weidemann', model: '1390', year: 2018, hours: '2.300', purchase_price: '18.000', asking_price: '26.900', in_date: U.addDays(U.today(), -200) });
     {
+      // Angebote
+      const dr = await call('a', 'GET', `/api/offers/draft?used_id=${um1.id}`);
+      assert.ok(dr.number && dr.valid_until > dr.date); assert.equal(dr.positions.length, 1);
+      assert.match(dr.positions[0].text, /Weidemann 1390/); assert.match(dr.positions[0].text, /Baujahr 2018/); assert.equal(dr.positions[0].price, 26900);
+      const cOff = (await call('a', 'POST', '/api/customers', { salutation: 'Herr', first_name: 'Otto', last_name: 'Angebot', street: 'Feld 3', zip: '48329', city: 'Havixbeck' })).id;
+      const ca = await call('a', 'GET', `/api/offers/customer/${cOff}`);
+      assert.equal(ca.salutation, 'Herrn'); assert.equal(ca.name, 'Otto Angebot'); assert.equal(ca.zip_city, '48329 Havixbeck');
+      await assert.rejects(call('a', 'POST', '/api/offers', { ...dr, ...ca, positions: [] }), /Position/);
+      const of1 = await call('a', 'POST', '/api/offers', { ...dr, ...ca, customer_no: '10280', positions: [...dr.positions, { artnr: 'FR', text: 'Frachtkostenanteil', qty: '1', price: '120' }], text: 'Mehrpreis Kehrwalze   182,41 € + 19% MWSt' });
+      assert.equal(of1.net, 27020); assert.equal(of1.vat, 5133.8); assert.equal(of1.gross, 32153.8);
+      await assert.rejects(call('a', 'POST', '/api/offers', { ...dr, ...ca, number: of1.number }), /vergeben/);
+      const pdf = await fetch(base + `/api/offers/${of1.id}/pdf`, { headers: { Cookie: jars.a } });
+      assert.equal(pdf.headers.get('content-type'), 'application/pdf');
+      const pbuf = Buffer.from(await pdf.arrayBuffer()); assert.ok(pbuf.slice(0, 5).toString() === '%PDF-' && pbuf.length > 2000);
+      // viele Positionen -> mehrere Seiten
+      const many = Array.from({ length: 30 }, (_, i) => ({ text: `Zubehör ${i + 1}\nZeile 2`, qty: 1, price: 10 }));
+      const of2 = await call('a', 'POST', '/api/offers', { ...ca, positions: many });
+      assert.equal(Number(of2.number), Number(of1.number) + 1);
+      const p2 = Buffer.from(await (await fetch(base + `/api/offers/${of2.id}/pdf`, { headers: { Cookie: jars.a } })).arrayBuffer());
+      assert.ok((p2.toString('latin1').match(/\/Type \/Page\b/g) || []).length >= 2, 'mehrseitig');
+      // angenommen -> Maschine reserviert
+      await call('a', 'PUT', `/api/offers/${of1.id}`, { status: 'angenommen' });
+      assert.equal((await call('a', 'GET', `/api/used/${um1.id}`)).status, 'reserviert');
+      await call('a', 'PUT', `/api/used/${um1.id}`, { status: 'verfuegbar' });
+      assert.equal((await call('a', 'GET', `/api/offers?customer_id=${cOff}`)).rows.length, 2);
+      // Briefpapier
+      const lh = await fetch(base + '/api/offer-settings/letterhead', { method: 'POST', headers: { 'X-Requested-With': 'crm', Cookie: jars.a, 'Content-Type': 'image/png' }, body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64') });
+      assert.equal((await lh.json()).letterhead, true);
+      assert.equal((await fetch(base + `/api/offers/${of1.id}/pdf`, { headers: { Cookie: jars.a } })).status, 200);
+      await call('a', 'DELETE', '/api/offer-settings/letterhead');
+      await assert.rejects(call('k', 'PUT', '/api/offer-settings', { terms: 'x' }), /403/);
+      await call('a', 'DELETE', `/api/offers/${of2.id}`); await call('a', 'DELETE', `/api/offers/${of1.id}`);
+      await call('a', 'DELETE', `/api/customers/${cOff}`);
+    }
+    {
       // Zusatzkosten (Fracht, Zubehör …) und Aufschlag
       const cm = await call('a', 'POST', '/api/used', { category: 'Mähroboter', brand: 'Husqvarna', model: 'Test 450X', condition: 'neu', purchase_price: '2.000', markup_pct: '12,5',
         costs: [{ label: 'Fracht', amount: '150' }, { label: 'Montage', amount: 50.5 }, { label: 'leer', amount: '' }, { label: '', amount: '10' }], asking_price: '2.600' });

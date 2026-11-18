@@ -585,3 +585,27 @@ tr.click { cursor: pointer; }
 .markup { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .markup .pct-in { width: 90px; }
 @media (max-width: 640px) { .cost-row { grid-template-columns: 1fr 110px auto; } }
+
+/* Angebote */
+.opos { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.opos-nr { width: 22px; font-weight: 800; color: var(--muted); padding-top: 8px; }
+.opos-main { flex: 1; min-width: 0; }
+.opos-top { display: flex; gap: 8px; align-items: flex-start; }
+.opos-top textarea { flex: 1; min-height: 38px; resize: vertical; font-family: inherit; }
+.opos-top input.opos-art { width: 90px; flex: 0 0 90px; }
+.opos-top textarea { width: auto; flex: 1 1 auto; }
+.opos-nums { display: flex; gap: 10px; align-items: flex-end; margin-top: 6px; flex-wrap: wrap; }
+.opos-nums label { font-size: 12px; color: var(--muted); font-weight: 700; display: flex; flex-direction: column; gap: 2px; }
+.opos-nums label > input { width: 80px; }
+.opos-nums .money { width: 150px; }
+.opos-tot { display: flex; flex-direction: column; min-width: 110px; text-align: right; margin-left: auto; }
+.opos-btns { display: flex; gap: 2px; }
+.offer-sum { padding: 9px 0; }
+.ostat { font-size: 12px; font-weight: 800; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); }
+.ostat.angenommen { background: var(--ok-50); color: var(--ok); border-color: transparent; }
+.ostat.abgelehnt { color: var(--muted); text-decoration: line-through; }
+.ostat.offen { background: var(--red-50); color: var(--red); border-color: transparent; }
+.pick-list { display: grid; gap: 6px; }
+.pick-row { display: flex; gap: 10px; align-items: center; text-align: left; border: 1px solid var(--line); background: #fff; border-radius: var(--radius); padding: 6px 10px; cursor: pointer; font: inherit; }
+.pick-row:hover { border-color: var(--red); }
+.red { color: var(--red); }

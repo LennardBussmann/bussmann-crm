@@ -2105,6 +2105,7 @@ app.get('/healthz', (req, res) => res.json({ ok: true }));
 // HTML/JS/CSS immer neu prüfen (ETag), damit Updates sofort ankommen
 // Saison-Aktionen
 require('./lib/campaigns')(app, { auth });
+require('./lib/offers')(app, { auth, admin, express });
 // öffentliche Maschinenbörse für die Homepage
 require('./lib/boerse')(app, { get, all, DATA_DIR, PHOTO_TYPES });
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', setHeaders: (res, p) => res.set('Cache-Control', /\.(png|ico)$/.test(p) ? 'public, max-age=86400' : 'no-cache') }));

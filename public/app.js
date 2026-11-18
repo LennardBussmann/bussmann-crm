@@ -1712,12 +1712,12 @@ function portalLinks(s) {
 const thumb = (pid, cls = 'thumb') => (pid ? `<img class="${cls}" src="/api/used-photos/${pid}" alt="" loading="lazy">` : `<span class="${cls} empty-thumb">${icon('tractor')}</span>`);
 
 async function viewUsed(main, sub) {
-  const tab = sub === 'suche' ? 'suche' : 'lager';
+  const tab = sub === 'suche' ? 'suche' : sub === 'angebote' ? 'angebote' : 'lager';
   const openId = /^\d+$/.test(sub || '') ? Number(sub) : null;
   const st = { status: '', category: '', cond: sessionStorage.getItem('uCond') || '', q: '', sstatus: '' };
   main.innerHTML = `
     <div class="page-head"><h1>Maschinen</h1><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="u-web">${icon('link')} Homepage-Börse</button><button class="btn" id="u-search">${icon('search')} Suchauftrag anlegen</button><button class="btn primary" id="u-new">${icon('plus')} Maschine aufnehmen</button></div></div>
-    <div class="tabs"><a href="#/gebrauchte" class="${tab === 'lager' ? 'on' : ''}">${icon('tractor')} Lager</a><a href="#/gebrauchte/suche" class="${tab === 'suche' ? 'on' : ''}">${icon('search')} Suchaufträge <span class="badge grey" id="u-scount"></span></a></div>
+    <div class="tabs"><a href="#/gebrauchte" class="${tab === 'lager' ? 'on' : ''}">${icon('tractor')} Lager</a><a href="#/gebrauchte/suche" class="${tab === 'suche' ? 'on' : ''}">${icon('search')} Suchaufträge <span class="badge grey" id="u-scount"></span></a><a href="#/gebrauchte/angebote" class="${tab === 'angebote' ? 'on' : ''}">${icon('file')} Angebote</a></div>
     <div id="u-kpis" class="kpis kpis-6"></div>
     <div class="toolbar" id="u-bar"></div>
     <div class="card"><div class="table-wrap" id="u-list"></div></div>`;
@@ -1769,7 +1769,30 @@ async function viewUsed(main, sub) {
       : `<div class="empty">${st.sstatus ? 'Keine Suchaufträge für diesen Filter.' : 'Noch keine offenen Suchaufträge. Wenn ein Kunde etwas sucht, das gerade nicht da ist: „Suchauftrag anlegen“.'}</div>`;
     $$('#u-list tr[data-sid]').forEach((tr) => tr.onclick = async () => openSearchForm(await api('/searches/' + tr.dataset.sid), loadSuche));
   };
-  const reload = tab === 'suche' ? loadSuche : loadLager;
+  const loadOffers = async () => {
+    const d = await api('/offers?' + new URLSearchParams({ status: st.ostatus || '', q: st.oq || '' }));
+    const open = d.rows.filter((r) => r.status === 'offen');
+    $('#u-kpis').innerHTML = [['Offene Angebote', open.length], ['Volumen offen (netto)', eur(open.reduce((n, r) => n + r.net, 0)) || '0 €'], ['Angenommen', d.rows.filter((r) => r.status === 'angenommen').length], ['Abgelaufen', open.filter((r) => r.valid_until && r.valid_until < todayISO()).length, open.some((r) => r.valid_until && r.valid_until < todayISO())]]
+      .map(([l, v, a]) => `<div class="kpi ${a ? 'alert' : ''}"><div class="l">${l}</div><div class="v">${v}</div></div>`).join('');
+    if (!$('#o-q')) {
+      $('#u-bar').innerHTML = `<div class="grow"><span class="ico">${icon('search')}</span><input type="search" id="o-q" placeholder="Suchen: Nummer, Kunde, Maschine …"></div>
+        <select id="o-stat" style="width:auto"><option value="">Alle Angebote</option>${Object.entries(d.statuses).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+        <button class="btn primary" id="o-new">${icon('plus')} Angebot erstellen</button>`;
+      $('#o-q').oninput = debounce((e) => { st.oq = e.target.value; loadOffers(); });
+      $('#o-stat').onchange = (e) => { st.ostatus = e.target.value; loadOffers(); };
+      $('#o-new').onclick = async () => openOfferForm(await api('/offers/draft'), loadOffers);
+    }
+    $('#u-list').innerHTML = d.rows.length ? `<table class="list"><thead><tr><th>Nr.</th><th>Datum</th><th>Empfänger</th><th class="hide-m">Inhalt</th><th class="num">Summe</th><th>Status</th><th></th></tr></thead><tbody>
+      ${d.rows.map((r) => `<tr data-oid="${r.id}" class="click"><td><b>${esc(r.number)}</b></td><td class="nowrap">${deDate(r.date)}${r.valid_until ? `<div class="muted small ${r.status === 'offen' && r.valid_until < todayISO() ? 'red' : ''}">gültig bis ${deDate(r.valid_until)}</div>` : ''}</td>
+        <td><b>${esc(r.name)}</b><div class="muted small">${esc(r.zip_city || '')}</div></td>
+        <td class="hide-m small">${esc((r.positions[0]?.text || '').split('\n').filter(Boolean).slice(0, 2).join(' · '))}${r.positions.length > 1 ? ` <span class="muted">+ ${r.positions.length - 1} Pos.</span>` : ''}</td>
+        <td class="num nowrap"><b>${eur2(r.net)} €</b><div class="muted small">${eur2(r.gross)} € brutto</div></td>
+        <td><span class="ostat ${r.status}">${esc(d.statuses[r.status])}</span></td>
+        <td class="nowrap"><a class="btn sm" href="/api/offers/${r.id}/pdf" target="_blank" rel="noopener" onclick="event.stopPropagation()">${icon('file')} PDF</a></td></tr>`).join('')}</tbody></table>`
+      : `<div class="empty">${st.oq || st.ostatus ? 'Keine Angebote für diesen Filter.' : 'Noch keine Angebote. „Angebot erstellen“ – oder in einer Maschine auf „Angebot“ klicken, dann ist sie schon eingetragen.'}</div>`;
+    $$('#u-list tr[data-oid]').forEach((tr) => tr.onclick = async () => openOfferForm(await api('/offers/' + tr.dataset.oid), loadOffers));
+  };
+  const reload = tab === 'suche' ? loadSuche : tab === 'angebote' ? loadOffers : loadLager;
   $('#u-new').onclick = () => openUsedForm(null, loadLager);
   $('#u-web').onclick = () => {
     const url = location.origin + '/boerse/';
@@ -1838,7 +1861,7 @@ async function openUsedForm(id, onSaved) {
       <div class="field full"><label>Interne Notizen <span class="muted">(nicht im Exposé)</span></label><textarea name="notes" rows="2">${esc(m.notes || '')}</textarea></div>
       ${m.sale_id ? `<div class="full callout ok">${icon('check')} Verkauft am ${deDate(m.sold_date)} – steht unter „Verkäufe“. <button type="button" class="btn sm" id="uf-sale">${icon('euro')} Verkauf öffnen</button></div>` : ''}
     </div></form>`,
-    foot: `<span class="left">${isEdit ? `<button class="btn danger" id="uf-del">${icon('trash')}</button> <a class="btn" target="_blank" rel="noopener" href="/api/used/${m.id}/expose.html">${icon('file')} Exposé</a>${m.status !== 'verkauft' ? ` <button class="btn" id="uf-sold">${icon('euro')} Verkauft …</button>` : ''}` : ''}</span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="uf-save">${isEdit ? 'Speichern' : 'Aufnehmen & Fotos hinzufügen'}</button>`,
+    foot: `<span class="left">${isEdit ? `<button class="btn danger" id="uf-del">${icon('trash')}</button> <a class="btn" target="_blank" rel="noopener" href="/api/used/${m.id}/expose.html">${icon('file')} Exposé</a> <button class="btn" id="uf-offer">${icon('file')} Angebot</button>${m.status !== 'verkauft' ? ` <button class="btn" id="uf-sold">${icon('euro')} Verkauft …</button>` : ''}` : ''}</span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="uf-save">${isEdit ? 'Speichern' : 'Aufnehmen & Fotos hinzufügen'}</button>`,
   });
   const f = $('#uf', md.el);
   const picker = customerPicker($('#uf-cust', md.el), m.customer_id ? { id: m.customer_id, name: m.customer_name || 'Kunde' } : null);
@@ -1915,6 +1938,11 @@ async function openUsedForm(id, onSaved) {
       openProjectForm(await api('/projects/' + r.id), onSaved);
     } catch (e) { fail(e); }
   });
+  $('#uf-offer', md.el).onclick = async () => {
+    try { await api('/used/' + m.id, { method: 'PUT', body: body() }); } catch (e) { fail(e); return; }
+    md.close(); onSaved && onSaved();
+    openOfferForm(await api('/offers/draft?used_id=' + m.id), () => { location.hash = '#/gebrauchte/angebote'; });
+  };
   const sb = $('#uf-sale', md.el); if (sb) sb.onclick = async () => { md.close(); openSaleForm(await api('/sales/' + m.sale_id), onSaved); };
   const sold = $('#uf-sold', md.el);
   if (sold) sold.onclick = async () => {
@@ -1923,6 +1951,89 @@ async function openUsedForm(id, onSaved) {
     md.close();
     openSaleForm({ kind: 'verkauf', used_id: m.id, category: x.category, brand: x.brand, model: x.model, serial: x.serial, year: x.year, condition: x.condition, purchase_id: m.purchase_id, purchase_price: parseEur(x.purchase_price), extra_costs: x.costs.reduce((n, c) => n + c.amount, 0) || null, sale_price: parseEur(x.asking_price), notes: [`Lagermaschine Nr. G-${m.id}`, x.costs.length ? 'Zusatzkosten: ' + x.costs.map((c) => `${c.label} ${eur2(c.amount)} €`).join(', ') : ''].filter(Boolean).join('\n') }, onSaved);
   };
+}
+
+// ======================= Angebote =======================
+const OFFER_STATUS = { offen: 'Offen', angenommen: 'Angenommen', abgelehnt: 'Abgelehnt' };
+async function openOfferForm(o, onSaved) {
+  const isEdit = !!o.id;
+  let pos = (o.positions || []).map((p) => ({ ...p }));
+  const md = modal({
+    title: isEdit ? `Angebot ${esc(o.number)}` : 'Angebot erstellen', wide: true,
+    body: `<form id="of"><div class="form-grid">
+      <div class="sec full">Empfänger</div>
+      <div class="field full"><label>Kunde aus dem CRM <span class="muted">(füllt die Anschrift aus)</span></label><div id="of-cust"></div></div>
+      <div class="field"><label>Anrede</label><select name="salutation">${['Herrn', 'Frau', 'Firma', 'Familie', 'Eheleute', ''].map((s) => `<option value="${s}" ${o.salutation === s ? 'selected' : ''}>${s || '–'}</option>`).join('')}</select></div>
+      <div class="field"><label>Name <span class="req">*</span></label><input type="text" name="name" value="${esc(o.name || '')}" required></div>
+      <div class="field"><label>Zusatz <span class="muted">(z. B. Ansprechpartner)</span></label><input type="text" name="name2" value="${esc(o.name2 || '')}"></div>
+      <div class="field"><label>Straße</label><input type="text" name="street" value="${esc(o.street || '')}"></div>
+      <div class="field"><label>PLZ und Ort</label><input type="text" name="zip_city" value="${esc(o.zip_city || '')}"></div>
+      <div class="field"><label>Kunden-Nr.</label><input type="text" name="customer_no" value="${esc(o.customer_no || '')}"></div>
+      <div class="sec full">Angebot</div>
+      <div class="field"><label>Nummer</label><input type="text" name="number" value="${esc(o.number || '')}"></div>
+      <div class="field"><label>Datum</label><input type="date" name="date" value="${esc(o.date || todayISO())}"></div>
+      <div class="field"><label>Gültig bis</label><input type="date" name="valid_until" value="${esc(o.valid_until || '')}"></div>
+      <div class="field"><label>USt-IdNr</label><input type="text" name="vat_id" value="${esc(o.vat_id || '')}"></div>
+      <div class="field"><label>Status</label><select name="status">${Object.entries(OFFER_STATUS).map(([k, v]) => `<option value="${k}" ${o.status === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      <div class="field"><label>Zuständig</label><select name="user_id">${userOptions(o.user_id || state.me.id)}</select></div>
+      <div class="sec full">Positionen <span class="muted small" style="text-transform:none;letter-spacing:0;font-weight:600">Preise netto</span></div>
+      <div class="full"><div id="of-pos"></div>
+        <div class="cost-add"><button type="button" class="btn sm" id="of-add">${icon('plus')} Position</button><button type="button" class="btn sm" id="of-fr">${icon('plus')} Frachtkostenanteil</button><button type="button" class="btn sm" id="of-mach">${icon('tractor')} Maschine aus dem Lager</button></div></div>
+      <div class="field full"><label>Text unter den Positionen <span class="muted">(z. B. Mehrpreise, Optionen – drei Leerzeichen trennen den Preis als zweite Spalte)</span></label><textarea name="text" rows="3" placeholder="Mehrpreis für 2. Kehrwalze schwarz   182,41 € + 19% MWSt">${esc(o.text || '')}</textarea></div>
+      <div class="field"><label>MwSt.</label><select name="vat_rate">${[19, 7, 0].map((v) => `<option value="${v}" ${Number(o.vat_rate ?? 19) === v ? 'selected' : ''}>${v} %</option>`).join('')}</select></div>
+      <div class="field"><label>&nbsp;</label><div class="offer-sum" id="of-sum"></div></div>
+    </div></form>`,
+    foot: `<span class="left">${isEdit ? `<button class="btn danger" id="of-del">${icon('trash')}</button>` : ''}</span><button class="btn" id="of-pdf">${icon('file')} Speichern &amp; PDF</button><button class="btn primary" id="of-save">Speichern</button>`,
+  });
+  const f = $('#of', md.el);
+  const fill = (a) => { for (const k of ['salutation', 'name', 'name2', 'street', 'zip_city', 'customer_no', 'vat_id']) if (a[k] !== undefined && f[k]) f[k].value = a[k] || ''; };
+  const picker = customerPicker($('#of-cust', md.el), o.customer_id ? { id: o.customer_id, name: o.name || 'Kunde' } : null, async (c) => { if (c) fill(await api('/offers/customer/' + c.id)); });
+  const box = $('#of-pos', md.el);
+  const sum = () => {
+    const net = pos.reduce((n, p) => n + Math.round((parseEur(p.qty) ?? 0) * (parseEur(p.price) ?? 0) * 100) / 100, 0);
+    const rate = Number(f.vat_rate.value); const vat = Math.round(net * rate) / 100;
+    $('#of-sum', md.el).innerHTML = `Netto <b>${eur2(net)} €</b> · MwSt. ${eur2(vat)} € · <b>Brutto ${eur2(net + vat)} €</b>`;
+    $$('[data-ptot]', box).forEach((el) => { const p = pos[el.dataset.ptot]; el.textContent = eur2((parseEur(p.qty) ?? 0) * (parseEur(p.price) ?? 0)) + ' €'; });
+  };
+  const val = (v) => (v == null || v === '' ? '' : typeof v === 'number' ? eur2(v) : v);
+  const draw = () => {
+    box.innerHTML = pos.length ? pos.map((p, i) => `<div class="opos">
+      <div class="opos-nr">${i + 1}</div>
+      <div class="opos-main"><div class="opos-top"><input type="text" data-k="artnr" data-i="${i}" value="${esc(p.artnr || '')}" placeholder="Art.-Nr." class="opos-art"><textarea data-k="text" data-i="${i}" rows="${Math.min(14, Math.max(1, String(p.text || '').split('\n').length))}" placeholder="Bezeichnung – jede Zeile wird eine Zeile im Angebot">${esc(p.text || '')}</textarea></div>
+        <div class="opos-nums"><label>Menge<input type="text" inputmode="decimal" data-k="qty" data-i="${i}" value="${esc(val(p.qty ?? 1))}"></label><label>E-Preis netto<div class="money plain"><input type="text" inputmode="decimal" data-k="price" data-i="${i}" value="${esc(val(p.price))}" placeholder="0,00"><span>€</span></div></label><div class="opos-tot"><span class="muted small">Endpreis</span><b data-ptot="${i}"></b></div>
+          <div class="opos-btns">${i ? `<button type="button" class="btn ghost icon" data-up="${i}" title="Nach oben">↑</button>` : ''}<button type="button" class="btn ghost icon" data-pdel="${i}" title="Entfernen">${icon('trash')}</button></div></div></div></div>`).join('')
+      : '<div class="muted small" style="padding:6px 0">Noch keine Position.</div>';
+    $$('[data-k]', box).forEach((el) => el.oninput = () => { pos[el.dataset.i][el.dataset.k] = el.value; if (el.tagName === 'TEXTAREA') el.rows = Math.min(14, Math.max(1, el.value.split('\n').length)); sum(); });
+    $$('[data-pdel]', box).forEach((b) => b.onclick = () => { pos.splice(Number(b.dataset.pdel), 1); draw(); });
+    $$('[data-up]', box).forEach((b) => b.onclick = () => { const i = Number(b.dataset.up); [pos[i - 1], pos[i]] = [pos[i], pos[i - 1]]; draw(); });
+    sum();
+  };
+  draw();
+  f.vat_rate.onchange = sum;
+  $('#of-add', md.el).onclick = () => { pos.push({ artnr: '', text: '', qty: 1, price: '' }); draw(); $$('textarea[data-k]', box).pop().focus(); };
+  $('#of-fr', md.el).onclick = () => { pos.push({ artnr: 'FR', text: 'Frachtkostenanteil', qty: 1, price: '' }); draw(); $$('[data-k="price"]', box).pop().focus(); };
+  $('#of-mach', md.el).onclick = async () => {
+    const d = await api('/used');
+    const list = d.rows.filter((m) => m.status !== 'verkauft');
+    const pm = modal({ title: 'Maschine aus dem Lager', body: list.length ? `<div class="pick-list">${list.map((m) => `<button type="button" class="pick-row" data-m="${m.id}">${thumb(m.photo_id, 'thumb sm')}<span class="grow"><b>${esc(m.title)}</b><span class="muted small"> ${esc(usedSpecs(m))}</span></span><b>${m.asking_price != null ? eur(m.asking_price) : ''}</b></button>`).join('')}</div>` : '<div class="empty">Keine Maschine im Lager.</div>' });
+    $$('[data-m]', pm.el).forEach((b) => b.onclick = async () => {
+      const dr = await api('/offers/draft?used_id=' + b.dataset.m);
+      pos.push(...dr.positions); o.used_id = dr.used_id; pm.close(); draw();
+    });
+  };
+  const body = () => ({ ...formData(f), customer_id: picker.get(), used_id: o.used_id || null, project_id: o.project_id || null,
+    positions: pos.map((p) => ({ artnr: p.artnr, text: p.text, qty: parseEur(p.qty) ?? 1, price: parseEur(p.price) ?? 0 })) });
+  const save = async () => {
+    const r = isEdit ? await api('/offers/' + o.id, { method: 'PUT', body: body() }) : await api('/offers', { method: 'POST', body: body() });
+    onSaved && onSaved(); return r;
+  };
+  $('#of-save', md.el).onclick = async () => { try { await save(); md.close(); toast('Angebot gespeichert'); } catch (e) { fail(e); } };
+  $('#of-pdf', md.el).onclick = async () => {
+    const w = window.open('', '_blank');   // sofort öffnen, sonst blockiert der Browser das Fenster
+    try { const r = await save(); md.close(); toast('Angebot gespeichert'); if (w) w.location = `/api/offers/${r.id}/pdf`; else location.href = `/api/offers/${r.id}/pdf`; } catch (e) { if (w) w.close(); fail(e); }
+  };
+  const del = $('#of-del', md.el);
+  if (del) del.onclick = async () => { if (!(await confirmBox(`Angebot ${esc(o.number)} löschen?`))) return; try { await api('/offers/' + o.id, { method: 'DELETE' }); md.close(); toast('Gelöscht'); onSaved && onSaved(); } catch (e) { fail(e); } };
 }
 
 async function openSearchForm(s, onSaved) {
@@ -2785,7 +2896,10 @@ function renderCompanyForm(main) {
         ${c.logo_url ? '<button type="button" class="btn sm" id="co-logo-del">Logo entfernen</button>' : ''}
       </div></div>
     <div class="full"><button class="btn primary" type="submit">Speichern</button></div>
-  </form>`;
+  </form>
+  <div class="sec" style="margin-top:22px">Angebote (PDF)</div>
+  <div id="os-body" class="small muted">Lädt …</div>`;
+  renderOfferSettings();
   const apply = async (co) => { state.company = co; await loadCompany(); renderShell(); route(); };
   $('#co-form').onsubmit = async (e) => {
     e.preventDefault();
@@ -2802,6 +2916,36 @@ function renderCompanyForm(main) {
   };
   const del = $('#co-logo-del');
   if (del) del.onclick = async () => { if (!await confirmBox('Logo entfernen? Statt des Logos wird dann der Firmenname gezeigt.', 'Entfernen')) return; try { await apply(await api('/company/logo', { method: 'DELETE' })); toast('Logo entfernt'); } catch (err) { fail(err); } };
+}
+
+async function renderOfferSettings() {
+  const s = await api('/offer-settings');
+  const el = $('#os-body'); if (!el) return;
+  el.className = '';
+  el.innerHTML = `<form id="os-form" class="form-grid">
+    <div class="field full"><label>Briefpapier <span class="muted">(Bild in A4 hochkant, JPG oder PNG – mit Logo, Kopf und Fußzeile, wie aus der Warenwirtschaft)</span></label>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        ${s.letterhead ? `<a href="/api/offer-settings/letterhead" target="_blank" rel="noopener" class="co-logo"><img src="/api/offer-settings/letterhead?v=${Date.now()}" alt="" style="max-height:90px"></a>` : '<span class="muted small">kein Briefpapier – das CRM zeichnet Logo, Anschrift und Fußzeile selbst</span>'}
+        <label class="btn sm">${icon('download')} Briefpapier hochladen<input type="file" id="os-letter" accept="image/jpeg,image/png" hidden></label>
+        ${s.letterhead ? '<button type="button" class="btn sm" id="os-letter-del">Entfernen</button>' : ''}
+      </div></div>
+    <div class="field"><label>Nächste Angebotsnummer</label><input type="text" name="next_number" value="${esc(s.next_number)}"></div>
+    <div class="field"><label>Gültigkeit <span class="muted">(Tage)</span></label><input type="number" name="valid_days" min="1" max="365" value="${esc(s.valid_days)}"></div>
+    <div class="field"><label>USt-IdNr <span class="muted">(Vorschlag im Angebotskopf)</span></label><input type="text" name="vat_id" value="${esc(s.vat_id)}"></div>
+    <div class="field"><label>Bankverbindung <span class="muted">(nur ohne Briefpapier, für die Fußzeile)</span></label><input type="text" name="bank" value="${esc(s.bank)}" placeholder="Volksbank … · IBAN … · BIC …"></div>
+    <div class="field full"><label>Text am Ende des Angebots</label><textarea name="terms" rows="3">${esc(s.terms)}</textarea></div>
+    <div class="full"><button class="btn primary" type="submit">Speichern</button></div>
+  </form>`;
+  $('#os-form').onsubmit = async (e) => { e.preventDefault(); try { await api('/offer-settings', { method: 'PUT', body: formData(e.target) }); toast('Gespeichert'); renderOfferSettings(); } catch (err) { fail(err); } };
+  $('#os-letter').onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const r = await fetch('/api/offer-settings/letterhead', { method: 'POST', headers: { 'Content-Type': f.type, 'X-Requested-With': 'crm' }, body: f });
+      const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Fehler');
+      toast('Briefpapier gespeichert'); renderOfferSettings();
+    } catch (err) { fail(err); }
+  };
+  const d = $('#os-letter-del'); if (d) d.onclick = async () => { try { await api('/offer-settings/letterhead', { method: 'DELETE' }); renderOfferSettings(); } catch (err) { fail(err); } };
 }
 
 function openUserForm(u) {
