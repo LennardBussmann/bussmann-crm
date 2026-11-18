@@ -1775,15 +1775,15 @@ async function viewUsed(main, sub) {
     $('#u-kpis').innerHTML = [['Offene Angebote', open.length], ['Volumen offen (netto)', eur(open.reduce((n, r) => n + r.net, 0)) || '0 €'], ['Angenommen', d.rows.filter((r) => r.status === 'angenommen').length], ['Abgelaufen', open.filter((r) => r.valid_until && r.valid_until < todayISO()).length, open.some((r) => r.valid_until && r.valid_until < todayISO())]]
       .map(([l, v, a]) => `<div class="kpi ${a ? 'alert' : ''}"><div class="l">${l}</div><div class="v">${v}</div></div>`).join('');
     if (!$('#o-q')) {
-      $('#u-bar').innerHTML = `<div class="grow"><span class="ico">${icon('search')}</span><input type="search" id="o-q" placeholder="Suchen: Nummer, Kunde, Maschine …"></div>
+      $('#u-bar').innerHTML = `<div class="grow"><span class="ico">${icon('search')}</span><input type="search" id="o-q" placeholder="Suchen: Kunde, Ort, Maschine …"></div>
         <select id="o-stat" style="width:auto"><option value="">Alle Angebote</option>${Object.entries(d.statuses).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
         <button class="btn primary" id="o-new">${icon('plus')} Angebot erstellen</button>`;
       $('#o-q').oninput = debounce((e) => { st.oq = e.target.value; loadOffers(); });
       $('#o-stat').onchange = (e) => { st.ostatus = e.target.value; loadOffers(); };
       $('#o-new').onclick = async () => openOfferForm(await api('/offers/draft'), loadOffers);
     }
-    $('#u-list').innerHTML = d.rows.length ? `<table class="list"><thead><tr><th>Nr.</th><th>Datum</th><th>Empfänger</th><th class="hide-m">Inhalt</th><th class="num">Summe</th><th>Status</th><th></th></tr></thead><tbody>
-      ${d.rows.map((r) => `<tr data-oid="${r.id}" class="click"><td><b>${esc(r.number)}</b></td><td class="nowrap">${deDate(r.date)}${r.valid_until ? `<div class="muted small ${r.status === 'offen' && r.valid_until < todayISO() ? 'red' : ''}">gültig bis ${deDate(r.valid_until)}</div>` : ''}</td>
+    $('#u-list').innerHTML = d.rows.length ? `<table class="list"><thead><tr><th>Datum</th><th>Empfänger</th><th class="hide-m">Inhalt</th><th class="num">Summe</th><th>Status</th><th></th></tr></thead><tbody>
+      ${d.rows.map((r) => `<tr data-oid="${r.id}" class="click"><td class="nowrap">${deDate(r.date)}${r.valid_until ? `<div class="muted small ${r.status === 'offen' && r.valid_until < todayISO() ? 'red' : ''}">gültig bis ${deDate(r.valid_until)}</div>` : ''}</td>
         <td><b>${esc(r.name)}</b><div class="muted small">${esc(r.zip_city || '')}</div></td>
         <td class="hide-m small">${esc((r.positions[0]?.text || '').split('\n').filter(Boolean).slice(0, 2).join(' · '))}${r.positions.length > 1 ? ` <span class="muted">+ ${r.positions.length - 1} Pos.</span>` : ''}</td>
         <td class="num nowrap"><b>${eur2(r.net)} €</b><div class="muted small">${eur2(r.gross)} € brutto</div></td>
@@ -2008,7 +2008,7 @@ async function openOfferForm(o, onSaved) {
   const isEdit = !!o.id;
   let pos = (o.positions || []).map((p) => ({ ...p }));
   const md = modal({
-    title: isEdit ? `Angebot ${esc(o.number)}` : 'Angebot erstellen', wide: true,
+    title: isEdit ? `Angebot an ${esc(o.name || '')}` : 'Angebot erstellen', wide: true,
     body: `<form id="of"><div class="form-grid">
       <div class="sec full">Empfänger</div>
       <div class="field full"><label>Kunde aus dem CRM <span class="muted">(füllt die Anschrift aus)</span></label><div id="of-cust"></div></div>
@@ -2019,7 +2019,6 @@ async function openOfferForm(o, onSaved) {
       <div class="field"><label>PLZ und Ort</label><input type="text" name="zip_city" value="${esc(o.zip_city || '')}"></div>
       <div class="field"><label>Kunden-Nr.</label><input type="text" name="customer_no" value="${esc(o.customer_no || '')}"></div>
       <div class="sec full">Angebot</div>
-      <div class="field"><label>Nummer</label><input type="text" name="number" value="${esc(o.number || '')}"></div>
       <div class="field"><label>Datum</label><input type="date" name="date" value="${esc(o.date || todayISO())}"></div>
       <div class="field"><label>Gültig bis</label><input type="date" name="valid_until" value="${esc(o.valid_until || '')}"></div>
       <div class="field"><label>USt-IdNr</label><input type="text" name="vat_id" value="${esc(o.vat_id || '')}"></div>
@@ -2082,7 +2081,7 @@ async function openOfferForm(o, onSaved) {
     try { const r = await save(); md.close(); toast('Angebot gespeichert'); if (w) w.location = `/api/offers/${r.id}/pdf`; else location.href = `/api/offers/${r.id}/pdf`; } catch (e) { if (w) w.close(); fail(e); }
   };
   const del = $('#of-del', md.el);
-  if (del) del.onclick = async () => { if (!(await confirmBox(`Angebot ${esc(o.number)} löschen?`))) return; try { await api('/offers/' + o.id, { method: 'DELETE' }); md.close(); toast('Gelöscht'); onSaved && onSaved(); } catch (e) { fail(e); } };
+  if (del) del.onclick = async () => { if (!(await confirmBox(`Angebot an ${esc(o.name || '')} vom ${deDate(o.date)} löschen?`))) return; try { await api('/offers/' + o.id, { method: 'DELETE' }); md.close(); toast('Gelöscht'); onSaved && onSaved(); } catch (e) { fail(e); } };
 }
 
 async function openSearchForm(s, onSaved) {
@@ -2978,7 +2977,6 @@ async function renderOfferSettings() {
         <label class="btn sm">${icon('download')} Briefpapier hochladen<input type="file" id="os-letter" accept="image/jpeg,image/png" hidden></label>
         ${s.letterhead ? '<button type="button" class="btn sm" id="os-letter-del">Entfernen</button>' : ''}
       </div></div>
-    <div class="field"><label>Nächste Angebotsnummer</label><input type="text" name="next_number" value="${esc(s.next_number)}"></div>
     <div class="field"><label>Gültigkeit <span class="muted">(Tage)</span></label><input type="number" name="valid_days" min="1" max="365" value="${esc(s.valid_days)}"></div>
     <div class="field"><label>USt-IdNr <span class="muted">(Vorschlag im Angebotskopf)</span></label><input type="text" name="vat_id" value="${esc(s.vat_id)}"></div>
     <div class="field"><label>Bankverbindung <span class="muted">(nur ohne Briefpapier, für die Fußzeile)</span></label><input type="text" name="bank" value="${esc(s.bank)}" placeholder="Volksbank … · IBAN … · BIC …"></div>
