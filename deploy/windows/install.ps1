@@ -142,11 +142,21 @@ try {
 
   Step 'Pruefen, ob das CRM laeuft'
   $ok = $false
-  for ($i = 0; $i -lt 30 -and -not $ok; $i++) {
+  for ($i = 0; $i -lt 90 -and -not $ok; $i++) {
     Start-Sleep -Seconds 2
     try { $ok = (Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:3000/healthz' -TimeoutSec 5).StatusCode -eq 200 } catch { }
   }
-  if (-not $ok) { throw 'Das CRM antwortet nicht. Bitte C:\BussmannCRM\logs\crm-fehler.log ansehen.' }
+  if (-not $ok) {
+    foreach ($f in 'start.log', 'crm-fehler.log', 'crm.log') {
+      $p = Join-Path $LogDir $f
+      Write-Host ''
+      Write-Host ('--- ' + $f + ' ---') -ForegroundColor Yellow
+      if (Test-Path $p) { Get-Content $p -Tail 15 | Write-Host } else { Write-Host '(Datei fehlt)' }
+    }
+    $t = Get-ScheduledTask -TaskPath '\Bussmann\' -TaskName 'Bussmann CRM' -ErrorAction SilentlyContinue
+    if ($t) { Write-Host ('Aufgabe "Bussmann CRM": ' + $t.State + ', letztes Ergebnis ' + (Get-ScheduledTaskInfo $t).LastTaskResult) }
+    throw 'Das CRM antwortet nicht (Details oben).'
+  }
 
   $nic = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).InterfaceIndex
   $lan = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $nic | Select-Object -First 1).IPAddress

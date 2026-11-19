@@ -14,11 +14,16 @@ try {
   $fresh = (Test-Path $stateFile) -and (((Get-Date) - (Get-Item $stateFile).LastWriteTime).TotalHours -lt 24)
   if (-not $Force -and $old.Trim() -eq $state -and $fresh) { exit 0 }
 
-  $pair = $cfg.dyndns_user + ':' + $cfg.dyndns_password
-  $auth = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pair))
   $url = 'https://dyndns.strato.com/nic/update?hostname=' + [Uri]::EscapeDataString($hosts) + '&myip=' + $ip
-  $res = (Invoke-WebRequest -UseBasicParsing -Uri $url -Headers @{ Authorization = $auth; 'User-Agent' = 'bussmann-crm-windows' } -TimeoutSec 30).Content.Trim()
-  Write-Log 'dyndns.log' "Strato-Antwort fuer $hosts ($ip): $res"
+  # Strato erwartet als Benutzer meist die Domain, bei Subdomains mit eigenem DynDNS-Passwort
+  # teils die Subdomain selbst. Deshalb nacheinander probieren.
+  $users = @($cfg.dyndns_user) + @($cfg.dyndns_hosts) | Where-Object { $_ } | Select-Object -Unique
+  foreach ($u in $users) {
+    $auth = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($u + ':' + $cfg.dyndns_password))
+    $res = (Invoke-WebRequest -UseBasicParsing -Uri $url -Headers @{ Authorization = $auth; 'User-Agent' = 'bussmann-crm-windows' } -TimeoutSec 30).Content.Trim()
+    Write-Log 'dyndns.log' "Strato-Antwort fuer $hosts ($ip, Benutzer $u): $res"
+    if ($res -notmatch 'badauth') { break }
+  }
   if ($res -match 'good|nochg') { Set-Content -Path $stateFile -Value $state -NoNewline } else { exit 1 }
 } catch {
   Write-Log 'dyndns.log' ('FEHLER: ' + $_.Exception.Message)
