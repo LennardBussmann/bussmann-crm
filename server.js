@@ -38,7 +38,34 @@ function setSessionCookie(req, res, tok, maxAgeSec) {
   const secure = req.secure || process.env.COOKIE_SECURE === '1' ? '; Secure' : '';
   res.set('Set-Cookie', `sid=${tok}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${secure}`);
 }
-function publicUser(u) { return u && { id: u.id, name: u.name, email: u.email, role: u.role, active: !!u.active, color: u.color, notify_email: !!u.notify_email }; }
+// ---------- Module & Berechtigungen ----------
+/** Module, die ein Administrator Mitarbeitern einzeln freischalten kann. Übersicht, Aufgaben, Kalender und das eigene Profil hat jeder. */
+const MODULES = [
+  ['kunden', 'Kunden'], ['karte', 'Karte & Touren'], ['projekte', 'Verkaufsprojekte'],
+  ['gebrauchte', 'Maschinen (Lager, Suchaufträge, Angebote)'], ['aktionen', 'Aktionen'], ['verkaeufe', 'Verkäufe'],
+];
+const MODULE_IDS = MODULES.map(([id]) => id);
+/** Liste der freigeschalteten Module eines Benutzers (Administratoren: alle) */
+function userModules(u) {
+  if (!u) return [];
+  if (u.role === 'admin' || u.modules == null) return [...MODULE_IDS];
+  return String(u.modules).split(',').filter((m) => MODULE_IDS.includes(m));
+}
+const hasModule = (u, m) => userModules(u).includes(m);
+/** Eingabe (Array oder Komma-Liste) → gespeicherter Wert */
+const cleanModules = (v) => (Array.isArray(v) ? v : String(v || '').split(',')).map((m) => String(m).trim()).filter((m, i, a) => MODULE_IDS.includes(m) && a.indexOf(m) === i).join(',');
+/** API-Pfad → Modul, zu dem er gehört (null = für alle angemeldeten Benutzer) */
+function moduleOfPath(p) {
+  if (/^\/customers\/\d+\/geo$/.test(p)) return ['kunden', 'karte']; // Standort korrigieren geht aus Kunde und Karte
+  if (/^\/(customers|entries|files|machines|import)(\/|$)/.test(p)) return ['kunden'];
+  if (/^\/(map|tours)(\/|$)/.test(p)) return ['karte'];
+  if (/^\/projects(\/|$)/.test(p)) return ['projekte'];
+  if (/^\/(used|used-photos|searches|offers)(\/|$)/.test(p)) return ['gebrauchte'];
+  if (/^\/campaigns(\/|$)/.test(p)) return ['aktionen'];
+  if (/^\/sales(\/|$)/.test(p)) return ['verkaeufe'];
+  return null;
+}
+function publicUser(u) { return u && { id: u.id, name: u.name, email: u.email, role: u.role, active: !!u.active, color: u.color, notify_email: !!u.notify_email, modules: userModules(u), all_modules: u.role === 'admin' || u.modules == null }; }
 
 app.use('/api', (req, res, next) => {
   const sid = parseCookies(req).sid;
@@ -56,6 +83,13 @@ app.use('/api', (req, res, next) => {
   next();
 });
 const auth = (req, res, next) => (req.user ? next() : res.status(401).json({ error: 'Bitte anmelden' }));
+// Nicht freigeschaltete Module sperren – auch direkt über die Adresse, nicht nur im Menü
+app.use('/api', (req, res, next) => {
+  if (!req.user) return next();
+  const mods = moduleOfPath(req.path);
+  if (mods && !mods.some((m) => hasModule(req.user, m))) return res.status(403).json({ error: 'Für diesen Bereich sind Sie nicht freigeschaltet. Bitte beim Administrator melden.' });
+  next();
+});
 const admin = (req, res, next) => (req.user && req.user.role === 'admin' ? next() : res.status(403).json({ error: 'Nur für Administratoren' }));
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const bad = (res, msg) => res.status(400).json({ error: msg });
@@ -118,6 +152,7 @@ app.post('/api/logout', (req, res) => {
 app.get('/api/me', auth, (req, res) => {
   res.json({
     user: publicUser(req.user),
+    modules: MODULES.map(([id, label]) => ({ id, label })),
     mailEnabled: mailEnabled(),
     unread: get('SELECT COUNT(*) n FROM notifications WHERE user_id=? AND read=0', req.user.id).n,
   });
@@ -156,18 +191,18 @@ app.get('/api/users', auth, (req, res) => {
   res.json(req.user.role === 'admin' ? rows : rows.filter((u) => u.active));
 });
 app.post('/api/users', auth, admin, (req, res) => {
-  const { name, email, password, role, color } = req.body || {};
+  const { name, email, password, role, color, modules } = req.body || {};
   if (!U.str(name) || !/^\S+@\S+\.\S+$/.test(email || '')) return bad(res, 'Name und gültige E-Mail angeben');
   if (String(password || '').length < 8) return bad(res, 'Passwort muss mind. 8 Zeichen haben');
   if (get('SELECT id FROM users WHERE email=?', email.trim())) return bad(res, 'Diese E-Mail ist bereits vergeben');
-  const r = run('INSERT INTO users(name,email,password_hash,role,ical_token,color) VALUES(?,?,?,?,?,?)',
-    U.str(name, 100), email.trim(), U.hashPassword(password), role === 'admin' ? 'admin' : 'user', U.token(24), /^#[0-9a-f]{6}$/i.test(color || '') ? color : '#6a6d6e');
+  const r = run('INSERT INTO users(name,email,password_hash,role,ical_token,color,modules) VALUES(?,?,?,?,?,?,?)',
+    U.str(name, 100), email.trim(), U.hashPassword(password), role === 'admin' ? 'admin' : 'user', U.token(24), /^#[0-9a-f]{6}$/i.test(color || '') ? color : '#6a6d6e', modules === undefined || modules === null || modules === 'all' ? null : cleanModules(modules));
   res.json(publicUser(get('SELECT * FROM users WHERE id=?', r.lastInsertRowid)));
 });
 app.put('/api/users/:id', auth, admin, (req, res) => {
   const u = get('SELECT * FROM users WHERE id=?', req.params.id);
   if (!u) return res.status(404).json({ error: 'Nicht gefunden' });
-  const { name, email, password, role, active, color } = req.body || {};
+  const { name, email, password, role, active, color, modules } = req.body || {};
   if (u.id === req.user.id && (role === 'user' || active === false)) return bad(res, 'Sie können sich nicht selbst die Admin-Rechte entziehen oder sich deaktivieren');
   if (email && email.trim().toLowerCase() !== u.email.toLowerCase() && get('SELECT id FROM users WHERE email=?', email.trim())) return bad(res, 'Diese E-Mail ist bereits vergeben');
   if (password) {
@@ -178,6 +213,7 @@ app.put('/api/users/:id', auth, admin, (req, res) => {
   run('UPDATE users SET name=COALESCE(?,name), email=COALESCE(?,email), role=COALESCE(?,role), active=COALESCE(?,active), color=COALESCE(?,color) WHERE id=?',
     U.str(name, 100), /^\S+@\S+\.\S+$/.test(email || '') ? email.trim() : null, ['admin', 'user'].includes(role) ? role : null,
     active === undefined ? null : (active ? 1 : 0), /^#[0-9a-f]{6}$/i.test(color || '') ? color : null, u.id);
+  if (modules !== undefined) run('UPDATE users SET modules=? WHERE id=?', modules === null || modules === 'all' ? null : cleanModules(modules), u.id);
   if (active === false) run('DELETE FROM sessions WHERE user_id=?', u.id);
   res.json(publicUser(get('SELECT * FROM users WHERE id=?', u.id)));
 });
@@ -342,7 +378,7 @@ app.get('/api/customers/:id', auth, (req, res) => {
   const projects = all(`${PROJECT_SQL} WHERE p.customer_id=? ORDER BY ${PROJ_CLOSED_SQL}, p.faellig IS NULL, p.faellig`, c.id).map(projCalc);
   const ids = all('SELECT id FROM customers ORDER BY last_name COLLATE NOCASE, first_name COLLATE NOCASE').map((r) => r.id);
   const i = ids.indexOf(c.id);
-  res.json({ customer: c, entries, tasks, files, machines, projects, prev: ids[i - 1] || null, next: ids[i + 1] || null });
+  res.json({ customer: c, entries, tasks, files, machines, projects: hasModule(req.user, 'projekte') ? projects : [], prev: ids[i - 1] || null, next: ids[i + 1] || null });
 });
 
 app.put('/api/customers/:id', auth, (req, res) => {

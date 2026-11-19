@@ -321,7 +321,15 @@ function showImage(f, list) {
 }
 
 // ======================= Zustand & Router =======================
-const state = { me: null, users: [], mailEnabled: false, unread: 0, dashScope: localStorage.getItem('dashScope') || 'mine', dashWeek: null };
+const state = { me: null, users: [], modules: [], mailEnabled: false, unread: 0, dashScope: localStorage.getItem('dashScope') || 'mine', dashWeek: null };
+/** Darf der angemeldete Benutzer dieses Modul nutzen? (Administratoren: immer) */
+const can = (m) => !!state.me && (state.me.role === 'admin' || (state.me.modules || []).includes(m));
+/** Welche Seite gehört zu welchem Modul */
+const ROUTE_MODULE = { kunden: 'kunden', karte: 'karte', projekte: 'projekte', gebrauchte: 'gebrauchte', aktionen: 'aktionen', verkaeufe: 'verkaeufe' };
+function viewNoAccess(main) {
+  main.innerHTML = `<div class="page-head"><h1>Kein Zugriff</h1></div><div class="card"><div class="card-body">${icon('info')} Dieser Bereich ist für Sie nicht freigeschaltet. Wenn Sie ihn brauchen, bitten Sie den Administrator, ihn unter <b>Einstellungen → Benutzer</b> für Sie freizuschalten.<div style="margin-top:12px"><a class="btn" href="#/">Zur Übersicht</a></div></div></div>`;
+  return Promise.resolve();
+}
 
 function route() {
   if (!state.me) return;
@@ -333,6 +341,8 @@ function route() {
   main.innerHTML = '<div class="empty">Lädt …</div>';
   window.scrollTo(0, 0);
   const views = { '': viewDashboard, start: viewDashboard, kunden: p1 ? () => viewCustomer(Number(p1)) : viewCustomers, aufgaben: viewTasks, kalender: viewCalendar, karte: viewMap, verkaeufe: viewSales, projekte: viewProjects, gebrauchte: () => viewUsed(main, p1), aktionen: viewCampaigns, einstellungen: viewSettings };
+  const mod = ROUTE_MODULE[p0];
+  if (mod && !can(mod)) { viewNoAccess(main); return; }
   (views[p0] || viewDashboard)(main).catch(fail);
   if (p0 === 'aufgaben' && p1) openTask(Number(p1));
 }
@@ -375,7 +385,7 @@ async function boot() {
   await loadCompany();
   try {
     const me = await api('/me', { allow401: true });
-    state.me = me.user; state.mailEnabled = me.mailEnabled; state.unread = me.unread;
+    state.me = me.user; state.modules = me.modules || []; state.mailEnabled = me.mailEnabled; state.unread = me.unread;
     state.users = await api('/users');
     renderShell();
     route();
@@ -428,15 +438,15 @@ function renderSetup() {
 
 // ======================= Grundgerüst =======================
 function renderShell() {
-  const nav = [['start', 'home', 'Übersicht'], ['kunden', 'users', 'Kunden'], ['karte', 'map', 'Karte'], ['aufgaben', 'tasks', 'Aufgaben'], ['kalender', 'cal', 'Kalender'], ['projekte', 'target', 'Projekte'], ['gebrauchte', 'tractor', 'Maschinen'], ['aktionen', 'bell', 'Aktionen'], ['verkaeufe', 'euro', 'Verkäufe'], ['einstellungen', 'gear', 'Einstellungen']];
+  const nav = [['start', 'home', 'Übersicht'], ['kunden', 'users', 'Kunden'], ['karte', 'map', 'Karte'], ['aufgaben', 'tasks', 'Aufgaben'], ['kalender', 'cal', 'Kalender'], ['projekte', 'target', 'Projekte'], ['gebrauchte', 'tractor', 'Maschinen'], ['aktionen', 'bell', 'Aktionen'], ['verkaeufe', 'euro', 'Verkäufe'], ['einstellungen', 'gear', 'Einstellungen']].filter(([r]) => !ROUTE_MODULE[r] || can(ROUTE_MODULE[r]));
   $('#app').innerHTML = `<div class="shell">
     <header class="topbar">
       <a class="brand" href="#/">${companyLogo()}</a>
-      <div class="search">
+      ${can('kunden') ? `<div class="search">
         <span class="ico">${icon('search')}</span>
         <input type="search" id="gsearch" placeholder="Kunde suchen (Name, Ort, Telefon …)" autocomplete="off">
         <div class="search-results hidden" id="gsearch-res"></div>
-      </div>
+      </div>` : ''}
       <div class="spacer"></div>
       <button class="btn primary sm" id="quick-task">${icon('plus')}<span class="hide-m">Aufgabe</span></button>
       <div class="rel">
@@ -453,7 +463,7 @@ function renderShell() {
   $('#logout').onclick = async () => { await api('/logout', { method: 'POST', body: {} }); state.me = null; location.hash = ''; renderLogin(); };
   $('#quick-task').onclick = () => openTaskForm({});
   $('#bell').onclick = toggleNotifications;
-  setupGlobalSearch();
+  if (can('kunden')) setupGlobalSearch();
 }
 
 function setupGlobalSearch() {
@@ -1118,7 +1128,8 @@ async function viewCustomer(id, tab) {
   const main = $('#main');
   const d = await api('/customers/' + id);
   const c = d.customer;
-  const curTab = tab || sessionStorage.getItem('custTab') || 'zeitleiste';
+  let curTab = tab || sessionStorage.getItem('custTab') || 'zeitleiste';
+  if (curTab === 'projekte' && !can('projekte')) curTab = 'zeitleiste';
   const openTasks = d.tasks.filter((t) => t.status === 'open');
   const age = c.birthday ? (() => { const b = parseISO(c.birthday); const n = new Date(); let a = n.getFullYear() - b.getFullYear(); if (n.getMonth() < b.getMonth() || (n.getMonth() === b.getMonth() && n.getDate() < b.getDate())) a--; return a; })() : null;
   const addr = [c.street, [c.zip, c.city].filter(Boolean).join(' ')].filter(Boolean).join(', ');
@@ -1173,7 +1184,7 @@ async function viewCustomer(id, tab) {
             <button data-tab="zeitleiste" class="${curTab === 'zeitleiste' ? 'on' : ''}">Zeitleiste</button>
             <button data-tab="aufgaben" class="${curTab === 'aufgaben' ? 'on' : ''}">Aufgaben ${openTasks.length ? `<span class="badge">${openTasks.length}</span>` : ''}</button>
             <button data-tab="maschinen" class="${curTab === 'maschinen' ? 'on' : ''}">Maschinen ${d.machines.length ? `<span class="badge grey">${d.machines.length}</span>` : ''}</button>
-            <button data-tab="projekte" class="${curTab === 'projekte' ? 'on' : ''}">Projekte ${d.projects.filter((p) => !p.closed).length ? `<span class="badge grey">${d.projects.filter((p) => !p.closed).length}</span>` : ''}</button>
+            ${can('projekte') ? `<button data-tab="projekte" class="${curTab === 'projekte' ? 'on' : ''}">Projekte ${d.projects.filter((p) => !p.closed).length ? `<span class="badge grey">${d.projects.filter((p) => !p.closed).length}</span>` : ''}</button>` : ''}
             <button data-tab="dateien" class="${curTab === 'dateien' ? 'on' : ''}">Dateien ${d.files.length ? `<span class="badge grey">${d.files.length}</span>` : ''}</button>
           </div>
           <div id="tab-body"></div>
@@ -1558,11 +1569,12 @@ async function openProjectForm(p, onSaved) {
         : `<div class="callout ok">${icon('check')} Beim Speichern wird der Verkauf automatisch unter „Verkäufe“ eingetragen${f.inzahlung.value || f.inz_wert.value ? ', die Inzahlungnahme als Einkauf (Lager)' : ''}${picker.get() ? ' und die Maschine beim Kunden' : ''}. Danach dort nur noch den Einkaufspreis ergänzen.</div>`)
       : (p.sale_id ? `<div class="callout warn">${icon('info')} Wenn das Projekt nicht mehr „Gewonnen“ ist, wird der automatisch angelegte Verkauf wieder entfernt.</div>` : '');
     const s1 = $('#pf-sale', md.el);
-    if (s1) s1.onclick = async () => { md.close(); openSaleForm(await api('/sales/' + p.sale_id), onSaved); };
+    if (s1 && !can('verkaeufe')) s1.remove();
+    else if (s1) s1.onclick = async () => { md.close(); openSaleForm(await api('/sales/' + p.sale_id), onSaved); };
   };
   f.status.onchange = upd; upd();
   const drawUsed = () => {
-    const box = $('#pf-used', md.el); if (!box) return;
+    const box = $('#pf-used', md.el); if (!box || !can('gebrauchte')) return;
     const u = p.used; const s = p.search; const closed = ['Gewonnen', 'Verloren'].includes(p.status);
     const others = s ? s.matches.filter((m) => !u || m.id !== u.id) : [];
     let h = '<div class="sec">Maschine aus dem Lager</div>';
@@ -2826,7 +2838,7 @@ async function viewSettings(main) {
   main.innerHTML = `
     <div class="page-head"><h1>Einstellungen</h1>${state.version && state.version.commit !== 'dev' ? `<span class="muted small" title="${esc(state.version.subject)}">Version ${esc(state.version.commit)} vom ${esc(state.version.date)} · automatische Updates aktiv</span>` : ''}</div>
     <div style="display:grid;gap:18px;max-width:900px">
-      <div class="card show-m-only"><div class="card-body more-links"><a class="btn" href="#/karte">${icon('map')} Karte</a><a class="btn" href="#/verkaeufe">${icon('euro')} Verkäufe</a><a class="btn" href="#/gebrauchte">${icon('tractor')} Maschinen</a><a class="btn" href="#/aktionen">${icon('bell')} Aktionen</a></div></div>
+      ${['karte', 'verkaeufe', 'gebrauchte', 'aktionen'].some(can) ? `<div class="card show-m-only"><div class="card-body more-links">${can('karte') ? `<a class="btn" href="#/karte">${icon('map')} Karte</a>` : ''}${can('verkaeufe') ? `<a class="btn" href="#/verkaeufe">${icon('euro')} Verkäufe</a>` : ''}${can('gebrauchte') ? `<a class="btn" href="#/gebrauchte">${icon('tractor')} Maschinen</a>` : ''}${can('aktionen') ? `<a class="btn" href="#/aktionen">${icon('bell')} Aktionen</a>` : ''}</div></div>` : ''}
       <div class="card"><div class="card-head"><h2>${icon('cal', 'lg')} Kalender mit Outlook &amp; iPhone verbinden</h2></div><div class="card-body">
         <p style="margin-top:0">Ihre Termine und Aufgaben aus dem CRM erscheinen als abonnierter Kalender in Outlook und auf dem iPhone (inkl. Kundengeburtstagen). Neue Einträge werden automatisch übernommen – Outlook aktualisiert je nach Version alle paar Stunden, das iPhone je nach Einstellung alle 15 Minuten bis stündlich.</p>
         <div class="field"><label>Ihre persönliche Abo-Adresse</label><code class="url" id="ical-url">${esc(ical.https)}</code></div>
@@ -2869,8 +2881,8 @@ async function viewSettings(main) {
 
       ${isAdmin ? `
       <div class="card"><div class="card-head"><h2>${icon('users', 'lg')} Benutzer</h2><button class="btn primary sm" id="u-new">${icon('plus')} Benutzer anlegen</button></div>
-        <table class="list"><thead><tr><th>Name</th><th>E-Mail</th><th>Rolle</th><th>Status</th><th></th></tr></thead><tbody>
-        ${state.users.map((u) => `<tr style="cursor:default"><td>${avatar(u.name, u.id, 'xs')} <b>${esc(u.name)}</b></td><td>${esc(u.email)}</td><td>${u.role === 'admin' ? 'Administrator' : 'Mitarbeiter'}</td><td>${u.active ? '<span class="chip ok">aktiv</span>' : '<span class="chip">deaktiviert</span>'}</td><td style="text-align:right"><button class="btn sm" data-uedit="${u.id}">${icon('edit')} Bearbeiten</button></td></tr>`).join('')}
+        <table class="list"><thead><tr><th>Name</th><th>E-Mail</th><th>Rolle / Bereiche</th><th>Status</th><th></th></tr></thead><tbody>
+        ${state.users.map((u) => `<tr style="cursor:default"><td>${avatar(u.name, u.id, 'xs')} <b>${esc(u.name)}</b></td><td>${esc(u.email)}</td><td>${u.role === 'admin' ? 'Administrator' : 'Mitarbeiter'}${u.role !== 'admin' ? `<div class="muted small">${u.all_modules ? 'alle Bereiche' : u.modules.length ? esc(state.modules.filter((x) => u.modules.includes(x.id)).map((x) => x.label.split(' (')[0]).join(', ')) : 'nur Aufgaben &amp; Kalender'}</div>` : ''}</td><td>${u.active ? '<span class="chip ok">aktiv</span>' : '<span class="chip">deaktiviert</span>'}</td><td style="text-align:right"><button class="btn sm" data-uedit="${u.id}">${icon('edit')} Bearbeiten</button></td></tr>`).join('')}
         </tbody></table></div>
 
       <div class="card"><div class="card-head"><h2>${icon('home', 'lg')} Firma</h2><span class="muted small">Name, Logo und Farbe erscheinen im CRM, in der Maschinenbörse, in PDFs und E-Mails</span></div><div class="card-body" id="co-body">Lädt …</div></div>
@@ -3006,13 +3018,22 @@ function openUserForm(u) {
       <div class="field"><label>Rolle</label><select name="role"><option value="user" ${u?.role === 'user' ? 'selected' : ''}>Mitarbeiter</option><option value="admin" ${u?.role === 'admin' ? 'selected' : ''}>Administrator</option></select></div>
       <div class="field"><label>Farbe</label><input type="color" name="color" value="${esc(u?.color || '#6a6d6e')}" style="height:38px;width:80px;padding:2px"></div>
       ${isEdit ? `<div class="field"><label>&nbsp;</label><label class="check"><input type="checkbox" name="active" ${u.active ? 'checked' : ''}> Zugang aktiv</label></div>` : ''}
+      <div class="field full" id="uf-mods"><label>Freigeschaltete Bereiche</label>
+        <div class="mod-checks">${state.modules.map((x) => `<label class="check"><input type="checkbox" data-mod="${x.id}" ${!u || u.modules.includes(x.id) ? 'checked' : ''}> ${esc(x.label)}</label>`).join('')}</div>
+        <div class="muted small" style="margin-top:4px">Übersicht, Aufgaben, Kalender und das eigene Profil hat jeder. Nicht angehakte Bereiche sieht der Mitarbeiter nicht im Menü und kann sie auch nicht öffnen.</div></div>
+      <div class="field full hidden" id="uf-admin-note"><div class="callout info">${icon('info')} Administratoren sehen alle Bereiche und dürfen Benutzer, Firma und Einstellungen verwalten.</div></div>
       <p class="full muted small" style="margin:0">Teilen Sie dem Kollegen Adresse, E-Mail und Passwort mit. Das Passwort kann er danach unter Einstellungen selbst ändern.</p>
     </form>`,
     foot: `<span class="left"></span><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="uf-save">Speichern</button>`,
   });
+  const roleSel = $('#uf select[name=role]', m.el);
+  const roleUpd = () => { const adm = roleSel.value === 'admin'; $('#uf-mods', m.el).classList.toggle('hidden', adm); $('#uf-admin-note', m.el).classList.toggle('hidden', !adm); };
+  roleSel.onchange = roleUpd; roleUpd();
   $('#uf-save', m.el).onclick = async () => {
     const f = $('#uf', m.el); if (!f.reportValidity()) return;
     const b = formData(f); if (isEdit && !b.password) delete b.password;
+    const mods = $$('[data-mod]', m.el);
+    if (b.role !== 'admin') b.modules = mods.every((x) => x.checked) ? 'all' : mods.filter((x) => x.checked).map((x) => x.dataset.mod);
     try {
       if (isEdit) await api('/users/' + u.id, { method: 'PUT', body: b }); else await api('/users', { method: 'POST', body: b });
       state.users = await api('/users'); m.close(); toast('Gespeichert'); route();
