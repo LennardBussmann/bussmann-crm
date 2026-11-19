@@ -325,7 +325,7 @@ const state = { me: null, users: [], modules: [], mailEnabled: false, unread: 0,
 /** Darf der angemeldete Benutzer dieses Modul nutzen? (Administratoren: immer) */
 const can = (m) => !!state.me && (state.me.role === 'admin' || (state.me.modules || []).includes(m));
 /** Welche Seite gehört zu welchem Modul */
-const ROUTE_MODULE = { kunden: 'kunden', karte: 'karte', projekte: 'projekte', gebrauchte: 'gebrauchte', aktionen: 'aktionen', verkaeufe: 'verkaeufe' };
+const ROUTE_MODULE = { kalender: 'kalender', kunden: 'kunden', karte: 'karte', projekte: 'projekte', gebrauchte: 'gebrauchte', aktionen: 'aktionen', verkaeufe: 'verkaeufe' };
 function viewNoAccess(main) {
   main.innerHTML = `<div class="page-head"><h1>Kein Zugriff</h1></div><div class="card"><div class="card-body">${icon('info')} Dieser Bereich ist für Sie nicht freigeschaltet. Wenn Sie ihn brauchen, bitten Sie den Administrator, ihn unter <b>Einstellungen → Benutzer</b> für Sie freizuschalten.<div style="margin-top:12px"><a class="btn" href="#/">Zur Übersicht</a></div></div></div>`;
   return Promise.resolve();
@@ -2882,7 +2882,7 @@ async function viewSettings(main) {
       ${isAdmin ? `
       <div class="card"><div class="card-head"><h2>${icon('users', 'lg')} Benutzer</h2><button class="btn primary sm" id="u-new">${icon('plus')} Benutzer anlegen</button></div>
         <table class="list"><thead><tr><th>Name</th><th>E-Mail</th><th>Rolle / Bereiche</th><th>Status</th><th></th></tr></thead><tbody>
-        ${state.users.map((u) => `<tr style="cursor:default"><td>${avatar(u.name, u.id, 'xs')} <b>${esc(u.name)}</b></td><td>${esc(u.email)}</td><td>${u.role === 'admin' ? 'Administrator' : 'Mitarbeiter'}${u.role !== 'admin' ? `<div class="muted small">${u.all_modules ? 'alle Bereiche' : u.modules.length ? esc(state.modules.filter((x) => u.modules.includes(x.id)).map((x) => x.label.split(' (')[0]).join(', ')) : 'nur Aufgaben &amp; Kalender'}</div>` : ''}</td><td>${u.active ? '<span class="chip ok">aktiv</span>' : '<span class="chip">deaktiviert</span>'}</td><td style="text-align:right"><button class="btn sm" data-uedit="${u.id}">${icon('edit')} Bearbeiten</button></td></tr>`).join('')}
+        ${state.users.map((u) => `<tr style="cursor:default"><td>${avatar(u.name, u.id, 'xs')} <b>${esc(u.name)}</b></td><td>${esc(u.email)}</td><td>${u.role === 'admin' ? 'Administrator' : 'Mitarbeiter'}${u.role !== 'admin' ? `<div class="muted small">${u.all_modules ? 'alle Bereiche' : u.modules.length ? esc(state.modules.filter((x) => u.modules.includes(x.id)).map((x) => x.label.split(' (')[0]).join(', ')) : 'nur Übersicht &amp; Aufgaben'}</div>` : ''}</td><td>${u.active ? '<span class="chip ok">aktiv</span>' : '<span class="chip">deaktiviert</span>'}</td><td style="text-align:right"><button class="btn sm" data-uedit="${u.id}">${icon('edit')} Bearbeiten</button></td></tr>`).join('')}
         </tbody></table></div>
 
       <div class="card"><div class="card-head"><h2>${icon('home', 'lg')} Firma</h2><span class="muted small">Name, Logo und Farbe erscheinen im CRM, in der Maschinenbörse, in PDFs und E-Mails</span></div><div class="card-body" id="co-body">Lädt …</div></div>
@@ -3020,7 +3020,7 @@ function openUserForm(u) {
       ${isEdit ? `<div class="field"><label>&nbsp;</label><label class="check"><input type="checkbox" name="active" ${u.active ? 'checked' : ''}> Zugang aktiv</label></div>` : ''}
       <div class="field full" id="uf-mods"><label>Freigeschaltete Bereiche</label>
         <div class="mod-checks">${state.modules.map((x) => `<label class="check"><input type="checkbox" data-mod="${x.id}" ${!u || u.modules.includes(x.id) ? 'checked' : ''}> ${esc(x.label)}</label>`).join('')}</div>
-        <div class="muted small" style="margin-top:4px">Übersicht, Aufgaben, Kalender und das eigene Profil hat jeder. Nicht angehakte Bereiche sieht der Mitarbeiter nicht im Menü und kann sie auch nicht öffnen.</div></div>
+        <div class="muted small" style="margin-top:4px">Übersicht, Aufgaben und das eigene Profil hat jeder. Nicht angehakte Bereiche sieht der Mitarbeiter nicht im Menü und kann sie auch nicht öffnen.</div></div>
       <div class="field full hidden" id="uf-admin-note"><div class="callout info">${icon('info')} Administratoren sehen alle Bereiche und dürfen Benutzer, Firma und Einstellungen verwalten.</div></div>
       <p class="full muted small" style="margin:0">Teilen Sie dem Kollegen Adresse, E-Mail und Passwort mit. Das Passwort kann er danach unter Einstellungen selbst ändern.</p>
     </form>`,

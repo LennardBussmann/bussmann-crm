@@ -39,9 +39,9 @@ function setSessionCookie(req, res, tok, maxAgeSec) {
   res.set('Set-Cookie', `sid=${tok}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${secure}`);
 }
 // ---------- Module & Berechtigungen ----------
-/** Module, die ein Administrator Mitarbeitern einzeln freischalten kann. Übersicht, Aufgaben, Kalender und das eigene Profil hat jeder. */
+/** Module, die ein Administrator Mitarbeitern einzeln freischalten kann. Übersicht, Aufgaben und das eigene Profil hat jeder. */
 const MODULES = [
-  ['kunden', 'Kunden'], ['karte', 'Karte & Touren'], ['projekte', 'Verkaufsprojekte'],
+  ['kalender', 'Kalender'], ['kunden', 'Kunden'], ['karte', 'Karte & Touren'], ['projekte', 'Verkaufsprojekte'],
   ['gebrauchte', 'Maschinen (Lager, Suchaufträge, Angebote)'], ['aktionen', 'Aktionen'], ['verkaeufe', 'Verkäufe'],
 ];
 const MODULE_IDS = MODULES.map(([id]) => id);
@@ -49,7 +49,8 @@ const MODULE_IDS = MODULES.map(([id]) => id);
 function userModules(u) {
   if (!u) return [];
   if (u.role === 'admin' || u.modules == null) return [...MODULE_IDS];
-  return String(u.modules).split(',').filter((m) => MODULE_IDS.includes(m));
+  const set = String(u.modules).split(',');
+  return MODULE_IDS.filter((m) => set.includes(m));
 }
 const hasModule = (u, m) => userModules(u).includes(m);
 /** Eingabe (Array oder Komma-Liste) → gespeicherter Wert */
@@ -59,6 +60,7 @@ function moduleOfPath(p) {
   if (/^\/customers\/\d+\/geo$/.test(p)) return ['kunden', 'karte']; // Standort korrigieren geht aus Kunde und Karte
   if (/^\/(customers|entries|files|machines|import)(\/|$)/.test(p)) return ['kunden'];
   if (/^\/(map|tours)(\/|$)/.test(p)) return ['karte'];
+  if (/^\/calendar(\/|$)/.test(p)) return ['kalender'];
   if (/^\/projects(\/|$)/.test(p)) return ['projekte'];
   if (/^\/(used|used-photos|searches|offers)(\/|$)/.test(p)) return ['gebrauchte'];
   if (/^\/campaigns(\/|$)/.test(p)) return ['aktionen'];
