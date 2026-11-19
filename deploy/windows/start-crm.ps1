@@ -4,6 +4,10 @@
 $ErrorActionPreference = 'Continue'
 Set-Location $Root
 
+# nur eine Instanz dieser Schleife zulassen (z. B. nach erneuter Installation)
+$mutex = New-Object Threading.Mutex($false, 'Global\BussmannCrmStart')
+try { if (-not $mutex.WaitOne(0)) { exit 0 } } catch [Threading.AbandonedMutexException] { }
+
 while ($true) {
   # waehrend eines Updates warten (hoechstens 15 Minuten, falls ein Update haengen bleibt)
   if (Test-Path $UpdateFlag) {

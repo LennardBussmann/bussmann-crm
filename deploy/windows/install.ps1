@@ -134,8 +134,13 @@ try {
     Register-ScheduledTask -TaskName $x.n -TaskPath '\Bussmann\' -Action $x.a -Trigger $x.t -Principal $user -Settings $x.s | Out-Null
     Write-Host ('  ' + $x.n)
   }
+  # alte Start-Schleifen (von einer frueheren Installation) beenden
+  Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
+    Where-Object { $_.CommandLine -like '*start-crm.ps1*' -or $_.CommandLine -like '*start-caddy.ps1*' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
   Stop-CrmNode
   Restart-Caddy
+  Start-Sleep -Seconds 2
   Start-ScheduledTask -TaskPath '\Bussmann\' -TaskName 'Bussmann CRM'
   Start-ScheduledTask -TaskPath '\Bussmann\' -TaskName 'Bussmann CRM Web'
   if ($cfg.dyndns_password) { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $ScriptDir 'dyndns.ps1') -Force }
@@ -144,7 +149,15 @@ try {
   $ok = $false
   for ($i = 0; $i -lt 90 -and -not $ok; $i++) {
     Start-Sleep -Seconds 2
-    try { $ok = (Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:3000/healthz' -TimeoutSec 5).StatusCode -eq 200 } catch { }
+    try {
+      # direkt ohne Proxy-Einstellungen von Windows abfragen
+      $wc = New-Object Net.WebClient
+      $wc.Proxy = $null
+      $ok = $wc.DownloadString('http://127.0.0.1:3000/healthz') -match 'ok'
+    } catch { }
+    if (-not $ok) {
+      try { $tc = New-Object Net.Sockets.TcpClient; $tc.Connect('127.0.0.1', 3000); $ok = $tc.Connected; $tc.Close() } catch { }
+    }
   }
   if (-not $ok) {
     foreach ($f in 'start.log', 'crm-fehler.log', 'crm.log') {

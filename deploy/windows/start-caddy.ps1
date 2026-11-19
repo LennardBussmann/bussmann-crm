@@ -3,6 +3,10 @@
 . (Join-Path $PSScriptRoot 'common.ps1')
 $ErrorActionPreference = 'Continue'
 Set-Location $Root
+
+# nur eine Instanz dieser Schleife zulassen (z. B. nach erneuter Installation)
+$mutex = New-Object Threading.Mutex($false, 'Global\BussmannCrmWeb')
+try { if (-not $mutex.WaitOne(0)) { exit 0 } } catch [Threading.AbandonedMutexException] { }
 $env:XDG_DATA_HOME = Join-Path $Root 'caddy-daten'
 $env:XDG_CONFIG_HOME = Join-Path $Root 'caddy-daten'
 
