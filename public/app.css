@@ -609,3 +609,4 @@ tr.click { cursor: pointer; }
 .pick-row { display: flex; gap: 10px; align-items: center; text-align: left; border: 1px solid var(--line); background: #fff; border-radius: var(--radius); padding: 6px 10px; cursor: pointer; font: inherit; }
 .pick-row:hover { border-color: var(--red); }
 .red { color: var(--red); }
+.mod-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 16px; }

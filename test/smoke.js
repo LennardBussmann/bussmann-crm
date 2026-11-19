@@ -771,6 +771,36 @@ const U = require('../lib/util');
     await assert.rejects(call('k', 'DELETE', `/api/customers/${id}`), /403/);
     await assert.rejects(call('x', 'GET', '/api/customers'), /401/);
 
+    // Module pro Benutzer freischalten
+    let ku = (await call('k', 'GET', '/api/me')).user;
+    assert.equal(ku.all_modules, true, 'bestehende Benutzer behalten alle Bereiche');
+    assert.ok(ku.modules.includes('verkaeufe'));
+    let ku2 = await call('a', 'PUT', `/api/users/${kollege.id}`, { modules: ['kunden', 'projekte', 'kalender', 'quatsch'] });
+    assert.deepEqual(ku2.modules, ['kalender', 'kunden', 'projekte']); assert.equal(ku2.all_modules, false);
+    await call('k', 'GET', '/api/customers');
+    await call('k', 'GET', '/api/projects');
+    await call('k', 'GET', '/api/tasks');
+    await call('k', 'GET', '/api/calendar?from=2026-01-01&to=2026-01-31');
+    for (const p of ['/api/sales', '/api/used', '/api/searches', '/api/offers', '/api/campaigns', '/api/tours', '/api/map']) await assert.rejects(call('k', 'GET', p), /403/, p);
+    await assert.rejects(call('k', 'POST', '/api/sales', { kind: 'verkauf', title: 'X' }), /403/);
+    ku2 = await call('a', 'PUT', `/api/users/${kollege.id}`, { modules: ['verkaeufe'] });
+    await assert.rejects(call('k', 'GET', `/api/customers/${id}`), /403/);
+    await call('k', 'GET', '/api/sales');
+    await call('k', 'GET', '/api/dashboard');
+    await assert.rejects(call('k', 'GET', '/api/calendar?from=2026-01-01&to=2026-01-31'), /403/);
+    ku2 = await call('a', 'PUT', `/api/users/${kollege.id}`, { modules: ['kalender'] });
+    await call('k', 'GET', '/api/calendar?from=2026-01-01&to=2026-01-31');
+    ku2 = await call('a', 'PUT', `/api/users/${kollege.id}`, { modules: [] });
+    assert.deepEqual(ku2.modules, []);
+    await call('k', 'GET', '/api/tasks');
+    await assert.rejects(call('k', 'GET', '/api/sales'), /403/);
+    ku2 = await call('a', 'PUT', `/api/users/${kollege.id}`, { modules: 'all' });
+    assert.equal(ku2.all_modules, true);
+    await call('k', 'GET', '/api/sales');
+    const neu = await call('a', 'POST', '/api/users', { name: 'Willi Werkstatt', email: 'willi@test.de', password: 'geheim123', modules: ['gebrauchte'] });
+    assert.deepEqual(neu.modules, ['gebrauchte']);
+    assert.equal((await call('a', 'GET', '/api/me')).user.all_modules, true, 'Admin sieht immer alles');
+
     console.log('✓ Alle Tests bestanden');
   } finally {
     server.close();
