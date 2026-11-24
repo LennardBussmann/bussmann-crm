@@ -105,7 +105,7 @@ async function openAbsenceForm(a = {}, reload) {
       $('#af-mid', m.el).checked && [v('#af-mid-s'), v('#af-mid-e')],
     ].filter(Boolean);
     if (!slots.length) { toast('Bitte ankreuzen: später kommen, früher gehen oder zwischendurch weg', true); return; }
-    if (slots.some(([s0, e0]) => !s0 || !e0)) { toast('Bitte die Uhrzeit auswählen', true); return; }
+    if (part && slots.some(([s0, e0]) => !s0 || !e0)) { toast('Bitte die Uhrzeit auswählen', true); return; }
     try {
       if (body.who === 'new') {
         if (!newName.value.trim()) { toast('Bitte den Namen des Mitarbeiters eingeben', true); newName.focus(); return; }
