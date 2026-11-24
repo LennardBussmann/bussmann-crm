@@ -2056,11 +2056,13 @@ function vacationAccount(s, year, state, today) {
   const yr = get('SELECT * FROM vacation_years WHERE staff_id=? AND year=?', s.id, year) || { days: null, carry: 0 };
   const list = all(`SELECT * FROM absences WHERE ${s.user_id ? 'user_id' : 'staff_id'}=? AND start_date<=? AND end_date>=? ORDER BY start_date`, s.user_id || s.id, to, from);
   const r = { taken: 0, planned: 0, sick: 0, entries: [] };
+  const partDays = { krank: new Set(), urlaub: new Set() }; // stundenweise: höchstens ein halber Tag pro Tag (z. B. später kommen + früher gehen)
   for (const a of list) {
-    const total = V.countDays(a, from, to, s.workdays, hol);
+    let total = V.countDays(a, from, to, s.workdays, hol);
+    if (a.start_time && partDays[a.kind]) { if (partDays[a.kind].has(a.start_date)) total = 0; else partDays[a.kind].add(a.start_date); }
     if (a.kind === 'krank') r.sick += total;
     if (a.kind !== 'urlaub') continue;
-    const past = today < from ? 0 : V.countDays(a, from, today < to ? today : to, s.workdays, hol);
+    const past = a.start_time ? (a.start_date <= today ? total : 0) : today < from ? 0 : V.countDays(a, from, today < to ? today : to, s.workdays, hol);
     r.taken += past; r.planned += total - past;
     r.entries.push({ id: a.id, start_date: a.start_date, end_date: a.end_date, start_time: a.start_time, end_time: a.end_time, note: a.note, days: total });
   }

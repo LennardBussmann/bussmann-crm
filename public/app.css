@@ -623,3 +623,8 @@ table.list.compact tr[data-abs] { cursor: pointer; }
 .month .cell.holiday.other { background: #faf5f5; }
 .timesel { display: flex; align-items: center; gap: 6px; }
 .timesel select { width: auto; min-width: 76px; }
+.af-teil { display: grid; gap: 8px; }
+.af-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.af-row label.check { min-width: 210px; margin: 0; }
+.af-row .timesel .muted { display: none; }
+.af-row label.check { min-width: 200px; }

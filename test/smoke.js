@@ -710,6 +710,12 @@ const U = require('../lib/util');
       await call('a', 'PUT', '/api/vacation/state', { state: 'BY' });
       assert.equal((await call('a', 'GET', '/api/vacation?year=2027')).holidays['2027-01-06'], 'Heilige Drei Könige');
       await call('a', 'PUT', '/api/vacation/state', { state: 'NW' });
+      // später kommen + früher gehen am selben Tag = zusammen ein halber Urlaubstag
+      const late = (await call('a', 'POST', '/api/absences', { who: 's' + hans.id, kind: 'urlaub', start_date: '2027-06-01', start_time: '00:00', end_time: '10:00' })).id;
+      await call('a', 'POST', '/api/absences', { who: 's' + hans.id, kind: 'urlaub', start_date: '2027-06-01', start_time: '15:30', end_time: '23:59' });
+      row = (await call('a', 'GET', '/api/vacation?year=2027')).rows.find((r) => r.id === hans.id);
+      assert.equal(row.planned + row.taken, 5.5);
+      assert.equal((await call('a', 'GET', '/api/absences?from=2027-06-01&to=2027-06-01')).find((x) => x.id === late).end_time, '10:00');
       await call('a', 'PUT', `/api/staff/${hans.id}`, { active: 0 });
       assert.equal((await call('a', 'GET', '/api/staff')).find((s) => s.id === hans.id).active, 0);
       await call('a', 'DELETE', `/api/staff/${hans.id}`);

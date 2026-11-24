@@ -36,11 +36,14 @@ const INTERVALS = { '': 'Kein Intervall', monthly: 'Monatlich', quarterly: 'Vier
 const TASK_KINDS = { anruf: 'Anruf', termin: 'Termin', besuch: 'Besuch', angebot: 'Angebot', wartung: 'Wartung', aufgabe: 'Aufgabe' };
 const ABSENCE_KINDS = { urlaub: ['Urlaub', '🏖'], privat: ['Privat / geblockt', '🔒'], krank: ['Krank', '🤒'], schulung: ['Schulung / Messe', '🎓'], sonstiges: ['Abwesend', '⛔'] };
 const absOn = (list, day) => (list || []).filter((a) => a.start_date <= day && a.end_date >= day);
+/** Uhrzeit einer stundenweisen Abwesenheit: „kommt 10:00“, „geht 15:30“ oder „08:00–10:00“ */
+const absTime = (a) => (!a.start_time ? '' : a.start_time === '00:00' ? `kommt ${a.end_time}` : a.end_time === '23:59' ? `geht ${a.start_time}` : `${a.start_time}–${a.end_time}`);
+const absTimeLong = (a) => (!a.start_time ? '' : a.start_time === '00:00' ? `kommt erst um ${a.end_time} Uhr` : a.end_time === '23:59' ? `geht schon um ${a.start_time} Uhr` : `${a.start_time}–${a.end_time} Uhr`);
 function absHtml(a, showWho = true) {
   const [label, emo] = ABSENCE_KINDS[a.kind] || ['Abwesend', '⛔'];
   const mine = a.user_id === state.me.id;
   return `<div class="ev absence k-abs-${a.kind}" data-abs="${a.id}" title="${esc((showWho || !mine ? a.user_name + ': ' : '') + label + (a.note ? ' – ' + a.note : ''))}">
-    <div class="ttl">${emo} ${showWho || !mine ? esc(a.user_name.split(' ')[0]) + ' · ' : ''}${label}</div>${a.start_time ? `<div class="t">${a.start_time}–${a.end_time}</div>` : ''}</div>`;
+    <div class="ttl">${emo} ${showWho || !mine ? esc(a.user_name.split(' ')[0]) + ' · ' : ''}${label}</div>${a.start_time ? `<div class="t">${absTime(a)}</div>` : ''}</div>`;
 }
 /** Auswahl „für wen“ (nur Admin): CRM-Benutzer und Mitarbeiter ohne CRM-Zugang */
 function whoOptions(staff, selected) {
@@ -57,19 +60,24 @@ async function openAbsenceForm(a = {}, reload) {
   const canEdit = !isEdit || a.user_id === state.me.id || adm;
   const staff = adm && canEdit ? await api('/staff').catch(() => []) : [];
   const who = a.staff_id ? 's' + a.staff_id : 'u' + (a.user_id || state.me.id);
+  const pm = !a.start_time ? '' : a.start_time === '00:00' ? 'late' : a.end_time === '23:59' ? 'early' : 'mid';
   const m = modal({
     title: isEdit ? (canEdit ? 'Abwesenheit bearbeiten' : 'Abwesenheit') : 'Abwesenheit eintragen',
     body: !canEdit ? `<div class="kv"><span class="k">Mitarbeiter</span><span>${esc(a.user_name)}</span><span class="k">Art</span><span>${ABSENCE_KINDS[a.kind]?.[1] || ''} ${esc(ABSENCE_KINDS[a.kind]?.[0] || '')}</span>
-        <span class="k">Zeitraum</span><span>${deDate(a.start_date)}${a.end_date !== a.start_date ? ' – ' + deDate(a.end_date) : ''}${a.start_time ? `, ${a.start_time}–${a.end_time} Uhr` : ''}</span></div>`
+        <span class="k">Zeitraum</span><span>${deDate(a.start_date)}${a.end_date !== a.start_date ? ' – ' + deDate(a.end_date) : ''}${a.start_time ? `, ${absTimeLong(a)}` : ''}</span></div>`
       : `<form id="af"><div class="form-grid">
       ${adm ? `<div class="field"><label>Mitarbeiter</label><select name="who" id="af-who">${whoOptions(staff, who)}</select>
         <input type="text" id="af-newname" class="hidden" placeholder="Name des Mitarbeiters" style="margin-top:6px" maxlength="100"></div>` : ''}
       <div class="field ${adm ? '' : 'full'}"><label>Art</label><div class="seg" id="af-kind">${Object.entries(ABSENCE_KINDS).map(([k, [l, e]]) => `<button type="button" data-k="${k}" class="${(a.kind || 'urlaub') === k ? 'on' : ''}">${e} ${l}</button>`).join('')}</div></div>
       <div class="field"><label>Von <span class="req">*</span></label><input type="date" name="start_date" value="${esc(a.start_date || todayISO())}" required></div>
       <div class="field"><label>Bis</label><input type="date" name="end_date" value="${esc(a.end_date || a.start_date || todayISO())}"></div>
-      <div class="field full"><label class="check"><input type="checkbox" id="af-part" ${a.start_time ? 'checked' : ''}> Nur ein paar Stunden (z. B. Arzttermin) – zählt als halber Tag</label></div>
-      <div class="field af-time"><label>Von Uhrzeit</label><input type="time" name="start_time" value="${esc(a.start_time || '08:00')}"></div>
-      <div class="field af-time"><label>Bis Uhrzeit</label><input type="time" name="end_time" value="${esc(a.end_time || '12:00')}"></div>
+      <div class="field full"><label>Dauer</label><div class="seg" id="af-dur"><button type="button" data-d="" class="${a.start_time ? '' : 'on'}">Ganzer Tag / mehrere Tage</button><button type="button" data-d="teil" class="${a.start_time ? 'on' : ''}">Nur stundenweise (später kommen, früher gehen …)</button></div></div>
+      <div class="field full af-teil">
+        <div class="af-row"><label class="check"><input type="checkbox" id="af-late" ${pm === 'late' ? 'checked' : ''}> Kommt später, erst um</label><input type="time" id="af-late-t" value="${esc(pm === 'late' ? a.end_time : '10:00')}"></div>
+        <div class="af-row"><label class="check"><input type="checkbox" id="af-early" ${pm === 'early' ? 'checked' : ''}> Geht früher, schon um</label><input type="time" id="af-early-t" value="${esc(pm === 'early' ? a.start_time : '15:00')}"></div>
+        <div class="af-row"><label class="check"><input type="checkbox" id="af-mid" ${pm === 'mid' ? 'checked' : ''}> Zwischendurch weg, von</label><input type="time" id="af-mid-s" value="${esc(pm === 'mid' ? a.start_time : '09:00')}"><span>bis</span><input type="time" id="af-mid-e" value="${esc(pm === 'mid' ? a.end_time : '11:00')}"></div>
+        <div class="muted small">Mehrere Haken = mehrere Einträge am selben Tag. Bei Urlaub zählt ein stundenweiser Tag als halber Urlaubstag.</div>
+      </div>
       <div class="field full"><label>Notiz <span class="muted">(sehen nur ${adm ? 'Administratoren und der Mitarbeiter selbst' : 'Sie und der Administrator'})</span></label><input type="text" name="note" value="${esc(a.note || '')}" placeholder="z. B. Familienurlaub, Zahnarzt …"></div>
       <div class="full callout info small">${icon('info')} Kollegen sehen im Kalender nur <b>wer</b> und <b>was</b> (z. B. „Urlaub“), keine Notiz. Wer an diesem Tag einen Termin für einen abwesenden Kollegen plant, bekommt einen Hinweis.${adm ? ' Urlaubstage, Resturlaub und Mitarbeiter ohne CRM-Zugang verwalten Sie in der <a href="#/kalender/urlaub">Urlaubsübersicht</a>.' : ''}</div>
     </div></form>`,
@@ -80,19 +88,33 @@ async function openAbsenceForm(a = {}, reload) {
   $$('#af-kind button', m.el).forEach((b) => b.onclick = () => { kind = b.dataset.k; $$('#af-kind button', m.el).forEach((x) => x.classList.toggle('on', x === b)); });
   const whoSel = $('#af-who', m.el); const newName = $('#af-newname', m.el);
   if (whoSel) whoSel.onchange = () => { newName.classList.toggle('hidden', whoSel.value !== 'new'); if (whoSel.value === 'new') newName.focus(); };
-  const part = $('#af-part', m.el); const start = $('[name=start_date]', m.el); const end = $('[name=end_date]', m.el);
-  const syncPart = () => { $$('.af-time', m.el).forEach((el) => el.classList.toggle('hidden', !part.checked)); if (part.checked) end.value = start.value; end.disabled = part.checked; };
-  part.onchange = syncPart; syncPart();
-  start.onchange = () => { if (!end.value || end.value < start.value || part.checked) end.value = start.value; };
+  const start = $('[name=start_date]', m.el); const end = $('[name=end_date]', m.el);
+  let part = !!a.start_time;
+  const syncPart = () => { $('.af-teil', m.el).classList.toggle('hidden', !part); if (part) end.value = start.value; end.disabled = part; };
+  $$('#af-dur button', m.el).forEach((b) => b.onclick = () => { part = !!b.dataset.d; $$('#af-dur button', m.el).forEach((x) => x.classList.toggle('on', x === b)); syncPart(); });
+  syncPart();
+  // Uhrzeit geändert = Haken automatisch setzen
+  [['#af-late-t', '#af-late'], ['#af-early-t', '#af-early'], ['#af-mid-s', '#af-mid'], ['#af-mid-e', '#af-mid']].forEach(([t, c]) => $(t, m.el).addEventListener('change', () => { $(c, m.el).checked = true; }));
+  start.onchange = () => { if (!end.value || end.value < start.value || part) end.value = start.value; };
   $('#af-save', m.el).onclick = async () => {
-    const body = { ...formData($('#af', m.el)), kind, end_date: end.value };
-    if (!part.checked) { body.start_time = ''; body.end_time = ''; }
+    const body = { ...formData($('#af', m.el)), kind, end_date: end.value, start_time: '', end_time: '' };
+    const v = (id) => $(id, m.el).value;
+    const slots = !part ? [['', '']] : [
+      $('#af-late', m.el).checked && ['00:00', v('#af-late-t')],
+      $('#af-early', m.el).checked && [v('#af-early-t'), '23:59'],
+      $('#af-mid', m.el).checked && [v('#af-mid-s'), v('#af-mid-e')],
+    ].filter(Boolean);
+    if (!slots.length) { toast('Bitte ankreuzen: später kommen, früher gehen oder zwischendurch weg', true); return; }
+    if (slots.some(([s0, e0]) => !s0 || !e0)) { toast('Bitte die Uhrzeit auswählen', true); return; }
     try {
       if (body.who === 'new') {
         if (!newName.value.trim()) { toast('Bitte den Namen des Mitarbeiters eingeben', true); newName.focus(); return; }
         body.who = 's' + (await api('/staff', { method: 'POST', body: { name: newName.value.trim() } })).id;
       }
-      if (isEdit) await api('/absences/' + a.id, { method: 'PUT', body }); else await api('/absences', { method: 'POST', body });
+      for (const [i, [st, et]] of slots.entries()) {
+        const b = { ...body, start_time: st, end_time: et };
+        if (isEdit && i === 0) await api('/absences/' + a.id, { method: 'PUT', body: b }); else await api('/absences', { method: 'POST', body: b });
+      }
       m.close(); toast('Abwesenheit gespeichert'); reload && reload();
     } catch (e) { fail(e); }
   };
@@ -107,7 +129,7 @@ function bindAbsenceWarning(root, getUsers, dateEl, timeEl, out) {
     const ids = getUsers(); const date = dateEl.value;
     if (!date || !ids.length) { out.innerHTML = ''; return; }
     const hits = await api(`/absences/check?date=${date}&time=${timeEl?.value || ''}&users=${ids.join(',')}`).catch(() => []);
-    out.innerHTML = hits.length ? `<div class="callout warn small">${icon('info')} ${hits.map((h) => `<b>${esc(h.user_id === state.me.id ? 'Sie sind' : h.user_name + ' ist')}</b> an diesem Tag abwesend (${esc(h.label)}${h.start_time ? `, ${h.start_time}–${h.end_time} Uhr` : ''})`).join('<br>')}. Termin trotzdem speichern?</div>` : '';
+    out.innerHTML = hits.length ? `<div class="callout warn small">${icon('info')} ${hits.map((h) => `<b>${esc(h.user_id === state.me.id ? 'Sie sind' : h.user_name + ' ist')}</b> an diesem Tag abwesend (${esc(h.label)}${h.start_time ? `, ${absTimeLong(h)}` : ''})`).join('<br>')}. Termin trotzdem speichern?</div>` : '';
   }, 250);
   root.addEventListener('change', check); root.addEventListener('click', (e) => { if (e.target.closest('[data-parts]')) check(); });
   check();
@@ -2918,7 +2940,7 @@ async function viewVacation(main) {
 function openStaffForm(r, d, reload) {
   const isNew = !r; const adm = d.admin;
   r = r || { name: '', external: true, active: 1, vacation_days: 30, workdays: '12345', days: 30, days_custom: false, carry: 0, entries: [] };
-  const entries = r.entries.length ? `<table class="list compact"><tbody>${r.entries.map((e) => `<tr data-abs="${e.id}"><td>🏖 ${deDate(e.start_date)}${e.end_date !== e.start_date ? ' – ' + deDate(e.end_date) : ''}${e.start_time ? `, ${e.start_time}–${e.end_time} Uhr` : ''}${e.note ? `<div class="muted small">${esc(e.note)}</div>` : ''}</td><td class="num">${fmtDays(e.days)} ${e.days === 1 ? 'Tag' : 'Tage'}</td></tr>`).join('')}</tbody></table>`
+  const entries = r.entries.length ? `<table class="list compact"><tbody>${r.entries.map((e) => `<tr data-abs="${e.id}"><td>🏖 ${deDate(e.start_date)}${e.end_date !== e.start_date ? ' – ' + deDate(e.end_date) : ''}${e.start_time ? `, ${absTimeLong(e)}` : ''}${e.note ? `<div class="muted small">${esc(e.note)}</div>` : ''}</td><td class="num">${fmtDays(e.days)} ${e.days === 1 ? 'Tag' : 'Tage'}</td></tr>`).join('')}</tbody></table>`
     : '<p class="muted small">In diesem Jahr noch kein Urlaub eingetragen.</p>';
   const m = modal({
     title: isNew ? 'Mitarbeiter ohne CRM-Zugang anlegen' : `Urlaub ${d.year}: ${r.name}`,
