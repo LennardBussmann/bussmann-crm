@@ -690,6 +690,7 @@ const U = require('../lib/util');
       const ha = (await call('a', 'POST', '/api/absences', { who: 's' + hans.id, kind: 'urlaub', start_date: '2027-05-03', end_date: '2027-05-09', note: 'Ostsee' })).id;
       await call('a', 'POST', '/api/absences', { who: 's' + hans.id, kind: 'krank', start_date: '2027-02-01', end_date: '2027-02-02' });
       const kOwn = (await call('k', 'POST', '/api/absences', { who: 's' + hans.id, kind: 'urlaub', start_date: '2027-08-02', end_date: '2027-08-03' })).id;
+      assert.ok((await call('a', 'GET', '/api/calendar?from=2027-05-01&to=2027-05-31')).absences.some((x) => x.user_name === 'Hans Helfer'), 'auch in „Mein Kalender“ sichtbar');
       const cal = await call('k', 'GET', '/api/calendar?from=2027-05-01&to=2027-05-31&scope=all');
       const hAbs = cal.absences.find((x) => x.id === ha);
       assert.equal(hAbs.user_name, 'Hans Helfer'); assert.equal(hAbs.user_id, null); assert.equal(hAbs.note, '');
