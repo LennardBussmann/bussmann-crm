@@ -610,3 +610,16 @@ tr.click { cursor: pointer; }
 .pick-row:hover { border-color: var(--red); }
 .red { color: var(--red); }
 .mod-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 16px; }
+
+/* Urlaubsübersicht & Feiertage */
+table.list.vac tbody tr { cursor: pointer; }
+table.list.vac td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.list.vac .neg { color: #a51e24; }
+table.list.compact td { padding: 6px 8px; }
+table.list.compact tr[data-abs] { cursor: pointer; }
+.hol-list { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13.5px; }
+.month .cell .hol { font-size: 10.5px; font-weight: 700; color: #a51e24; padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.month .cell.holiday { background: #fdf3f3; }
+.month .cell.holiday.other { background: #faf5f5; }
+.timesel { display: flex; align-items: center; gap: 6px; }
+.timesel select { width: auto; min-width: 76px; }
