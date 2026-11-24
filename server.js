@@ -1916,7 +1916,7 @@ app.get('/api/calendar', auth, (req, res) => {
   res.json({
     tasks: all(`${TASK_SQL} WHERE t.due_date BETWEEN ? AND ? ${who} ORDER BY t.due_date, t.due_time IS NOT NULL, t.due_time`, req.query.from, req.query.to, ...(scope === 'all' ? [] : [scope, scope])),
     birthdays: birthdaysBetween(req.query.from, req.query.to),
-    absences: absencesBetween(req.query.from, req.query.to, scope === 'all' ? null : scope, req.user),
+    absences: absencesBetween(req.query.from, req.query.to, null, req.user), // Abwesenheiten aller Mitarbeiter immer zeigen (wer ist wann weg)
     holidays: V.holidaysBetween(req.query.from, req.query.to, holidayState()),
   });
 });
