@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const express = require('express');
 const { get, all, run, tx, getSetting, setSetting, DATA_DIR } = require('./lib/db');
+const V = require('./lib/vacation');
 const Co = require('./lib/company');
 const U = require('./lib/util');
 const L = require('./lib/logic');
@@ -1916,19 +1917,32 @@ app.get('/api/calendar', auth, (req, res) => {
     tasks: all(`${TASK_SQL} WHERE t.due_date BETWEEN ? AND ? ${who} ORDER BY t.due_date, t.due_time IS NOT NULL, t.due_time`, req.query.from, req.query.to, ...(scope === 'all' ? [] : [scope, scope])),
     birthdays: birthdaysBetween(req.query.from, req.query.to),
     absences: absencesBetween(req.query.from, req.query.to, scope === 'all' ? null : scope, req.user),
+    holidays: V.holidaysBetween(req.query.from, req.query.to, holidayState()),
   });
 });
 
 // ---------- Abwesenheiten (Urlaub, privat geblockt …) ----------
+// Abwesenheiten gehören entweder zu einem CRM-Benutzer (user_id) oder zu einem Mitarbeiter ohne CRM-Zugang (staff_id).
+const ABS_SQL = `SELECT a.*, COALESCE(u.name, s.name) user_name, COALESCE(u.color, s.color) user_color FROM absences a
+  LEFT JOIN users u ON u.id=a.user_id LEFT JOIN staff s ON s.id=a.staff_id`;
 /** Notizen sieht nur der Mitarbeiter selbst (und Admins) */
 function absencesBetween(from, to, userId, viewer) {
-  return all(`SELECT a.*, u.name user_name, u.color user_color FROM absences a JOIN users u ON u.id=a.user_id
-    WHERE a.start_date<=? AND a.end_date>=? ${userId ? 'AND a.user_id=?' : ''} ORDER BY a.start_date, u.name`, to, from, ...(userId ? [userId] : []))
+  return all(`${ABS_SQL} WHERE a.start_date<=? AND a.end_date>=? ${userId ? 'AND a.user_id=?' : ''} ORDER BY a.start_date, user_name`, to, from, ...(userId ? [userId] : []))
     .map((a) => (a.user_id === viewer.id || viewer.role === 'admin' ? a : { ...a, note: '' }));
+}
+/** Für wen? Admin: CRM-Benutzer ("u12") oder Mitarbeiter ohne Zugang ("s3"); alle anderen: nur für sich selbst */
+function absencePerson(b, req) {
+  if (req.user.role !== 'admin') return { user_id: req.user.id, staff_id: null };
+  const w = String(b.who || '');
+  const sid = /^s\d+$/.test(w) ? Number(w.slice(1)) : (b.staff_id && !b.user_id ? Number(b.staff_id) : null);
+  if (sid && get('SELECT id FROM staff WHERE id=? AND user_id IS NULL', sid)) return { user_id: null, staff_id: sid };
+  const uid = /^u\d+$/.test(w) ? Number(w.slice(1)) : (b.user_id ? Number(b.user_id) : null);
+  if (uid && get('SELECT id FROM users WHERE id=?', uid)) return { user_id: uid, staff_id: null };
+  return { user_id: req.user.id, staff_id: null };
 }
 function cleanAbsence(b, req) {
   const a = {
-    user_id: req.user.role === 'admin' && b.user_id && get('SELECT id FROM users WHERE id=?', b.user_id) ? Number(b.user_id) : req.user.id,
+    ...absencePerson(b, req),
     kind: U.ABSENCE_KINDS[b.kind] ? b.kind : 'urlaub',
     start_date: U.isDate(b.start_date) ? b.start_date : null,
     end_date: U.isDate(b.end_date) ? b.end_date : (U.isDate(b.start_date) ? b.start_date : null),
@@ -1963,18 +1977,21 @@ app.get('/api/absences/check', auth, (req, res) => {
 app.post('/api/absences', auth, (req, res) => {
   const { a, error } = cleanAbsence(req.body || {}, req);
   if (error) return bad(res, error);
-  const r = run('INSERT INTO absences(user_id, kind, start_date, end_date, start_time, end_time, note, created_by) VALUES(?,?,?,?,?,?,?,?)',
-    a.user_id, a.kind, a.start_date, a.end_date, a.start_time, a.end_time, a.note, req.user.id);
+  const r = run('INSERT INTO absences(user_id, staff_id, kind, start_date, end_date, start_time, end_time, note, created_by) VALUES(?,?,?,?,?,?,?,?,?)',
+    a.user_id, a.staff_id, a.kind, a.start_date, a.end_date, a.start_time, a.end_time, a.note, req.user.id);
   res.json({ id: Number(r.lastInsertRowid) });
 });
 app.put('/api/absences/:id', auth, (req, res) => {
   const old = get('SELECT * FROM absences WHERE id=?', req.params.id);
   if (!old) return res.status(404).json({ error: 'Nicht gefunden' });
   if (old.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Nur der Mitarbeiter selbst kann das ändern' });
-  const { a, error } = cleanAbsence({ ...old, ...req.body, user_id: req.body.user_id ?? old.user_id }, req);
+  const b = req.body || {};
+  const person = b.who || b.user_id || b.staff_id ? {} : { who: old.staff_id ? 's' + old.staff_id : 'u' + old.user_id };
+  const { a, error } = cleanAbsence({ ...old, user_id: null, staff_id: null, ...b, ...person }, req);
   if (error) return bad(res, error);
-  run('UPDATE absences SET user_id=?, kind=?, start_date=?, end_date=?, start_time=?, end_time=?, note=? WHERE id=?',
-    req.user.role === 'admin' ? a.user_id : old.user_id, a.kind, a.start_date, a.end_date, a.start_time, a.end_time, a.note, old.id);
+  const keep = req.user.role !== 'admin';
+  run('UPDATE absences SET user_id=?, staff_id=?, kind=?, start_date=?, end_date=?, start_time=?, end_time=?, note=? WHERE id=?',
+    keep ? old.user_id : a.user_id, keep ? old.staff_id : a.staff_id, a.kind, a.start_date, a.end_date, a.start_time, a.end_time, a.note, old.id);
   res.json({ ok: true });
 });
 app.delete('/api/absences/:id', auth, (req, res) => {
@@ -1982,6 +1999,92 @@ app.delete('/api/absences/:id', auth, (req, res) => {
   if (!old) return res.status(404).json({ error: 'Nicht gefunden' });
   if (old.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Nur der Mitarbeiter selbst kann das löschen' });
   run('DELETE FROM absences WHERE id=?', old.id);
+  res.json({ ok: true });
+});
+
+// ---------- Mitarbeiter & Urlaubskonto ----------
+const holidayState = () => (V.STATES[getSetting('holidays_state')] ? getSetting('holidays_state') : 'NW');
+/** Jeder CRM-Benutzer bekommt automatisch einen Eintrag in der Mitarbeiterliste (für Urlaubstage) */
+function syncStaff() {
+  run('INSERT INTO staff(name, user_id, color) SELECT name, id, color FROM users WHERE id NOT IN (SELECT user_id FROM staff WHERE user_id IS NOT NULL)');
+}
+const STAFF_SQL = `SELECT s.id, COALESCE(u.name, s.name) name, s.user_id, s.vacation_days, s.workdays, COALESCE(u.color, s.color) color,
+  CASE WHEN s.user_id IS NULL THEN s.active ELSE u.active END active FROM staff s LEFT JOIN users u ON u.id=s.user_id`;
+const cleanWorkdays = (v) => { const w = [...new Set(String(v || '').replace(/[^1-7]/g, ''))].sort().join(''); return w || '12345'; };
+const cleanDays = (v, def) => { const n = Number(String(v ?? '').replace(',', '.')); return v === '' || v == null || !Number.isFinite(n) || n < 0 || n > 366 ? def : Math.round(n * 2) / 2; };
+
+app.get('/api/staff', auth, admin, (req, res) => {
+  syncStaff();
+  res.json(all(`${STAFF_SQL} ORDER BY active DESC, s.user_id IS NULL, name`));
+});
+app.post('/api/staff', auth, admin, (req, res) => {
+  const b = req.body || {};
+  const name = U.str(b.name, 100);
+  if (!name) return bad(res, 'Bitte einen Namen angeben');
+  if (get('SELECT id FROM staff WHERE user_id IS NULL AND lower(name)=lower(?) AND active=1', name)) return bad(res, 'Diesen Mitarbeiter gibt es schon');
+  const r = run('INSERT INTO staff(name, vacation_days, workdays, color) VALUES(?,?,?,?)', name, cleanDays(b.vacation_days, 30), cleanWorkdays(b.workdays), /^#[0-9a-f]{6}$/i.test(b.color || '') ? b.color : null);
+  res.json(get(`${STAFF_SQL} WHERE s.id=?`, Number(r.lastInsertRowid)));
+});
+app.put('/api/staff/:id', auth, admin, (req, res) => {
+  const old = get('SELECT * FROM staff WHERE id=?', req.params.id);
+  if (!old) return res.status(404).json({ error: 'Nicht gefunden' });
+  const b = req.body || {};
+  const name = old.user_id ? old.name : (U.str(b.name, 100) || old.name);
+  run('UPDATE staff SET name=?, vacation_days=?, workdays=?, active=? WHERE id=?', name, cleanDays(b.vacation_days, old.vacation_days),
+    b.workdays !== undefined ? cleanWorkdays(b.workdays) : old.workdays, old.user_id || b.active === undefined ? old.active : (b.active ? 1 : 0), old.id);
+  const year = Number(b.year);
+  if (Number.isInteger(year) && year > 2000 && year < 2100 && (b.days !== undefined || b.carry !== undefined)) {
+    const cur = get('SELECT * FROM vacation_years WHERE staff_id=? AND year=?', old.id, year) || { days: null, carry: 0 };
+    const days = b.days === undefined ? cur.days : (b.days === '' || b.days === null ? null : cleanDays(b.days, cur.days));
+    const carry = b.carry === undefined ? cur.carry : cleanDays(b.carry, 0);
+    run('INSERT INTO vacation_years(staff_id, year, days, carry) VALUES(?,?,?,?) ON CONFLICT(staff_id, year) DO UPDATE SET days=excluded.days, carry=excluded.carry', old.id, year, days, carry);
+  }
+  res.json(get(`${STAFF_SQL} WHERE s.id=?`, old.id));
+});
+app.delete('/api/staff/:id', auth, admin, (req, res) => {
+  const old = get('SELECT * FROM staff WHERE id=?', req.params.id);
+  if (!old) return res.status(404).json({ error: 'Nicht gefunden' });
+  if (old.user_id) return bad(res, 'CRM-Benutzer bitte unter Einstellungen → Benutzer deaktivieren');
+  run('DELETE FROM staff WHERE id=?', old.id);
+  res.json({ ok: true });
+});
+
+/** Urlaubsübersicht eines Jahres: Anspruch, Übertrag, genommen, geplant, Rest, Krankheitstage */
+function vacationAccount(s, year, state, today) {
+  const from = `${year}-01-01`; const to = `${year}-12-31`;
+  const hol = V.holidaysBetween(from, to, state);
+  const yr = get('SELECT * FROM vacation_years WHERE staff_id=? AND year=?', s.id, year) || { days: null, carry: 0 };
+  const list = all(`SELECT * FROM absences WHERE ${s.user_id ? 'user_id' : 'staff_id'}=? AND start_date<=? AND end_date>=? ORDER BY start_date`, s.user_id || s.id, to, from);
+  const r = { taken: 0, planned: 0, sick: 0, entries: [] };
+  const partDays = { krank: new Set(), urlaub: new Set() }; // stundenweise: höchstens ein halber Tag pro Tag (z. B. später kommen + früher gehen)
+  for (const a of list) {
+    let total = V.countDays(a, from, to, s.workdays, hol);
+    if (a.start_time && partDays[a.kind]) { if (partDays[a.kind].has(a.start_date)) total = 0; else partDays[a.kind].add(a.start_date); }
+    if (a.kind === 'krank') r.sick += total;
+    if (a.kind !== 'urlaub') continue;
+    const past = a.start_time ? (a.start_date <= today ? total : 0) : today < from ? 0 : V.countDays(a, from, today < to ? today : to, s.workdays, hol);
+    r.taken += past; r.planned += total - past;
+    r.entries.push({ id: a.id, start_date: a.start_date, end_date: a.end_date, start_time: a.start_time, end_time: a.end_time, note: a.note, days: total });
+  }
+  const days = yr.days ?? s.vacation_days;
+  return { ...r, days, days_custom: yr.days != null, carry: yr.carry || 0, entitlement: days + (yr.carry || 0), rest: days + (yr.carry || 0) - r.taken - r.planned };
+}
+app.get('/api/vacation', auth, (req, res) => {
+  syncStaff();
+  const year = /^\d{4}$/.test(req.query.year || '') ? Number(req.query.year) : Number(U.today().slice(0, 4));
+  const state = holidayState(); const today = U.today();
+  const isAdm = req.user.role === 'admin';
+  const staff = all(`${STAFF_SQL} ${isAdm ? '' : 'WHERE s.user_id=?'} ORDER BY s.user_id IS NULL, name`, ...(isAdm ? [] : [req.user.id]));
+  const rows = staff.map((s) => {
+    const acc = vacationAccount(s, year, state, today);
+    const prev = vacationAccount(s, year - 1, state, today);
+    return { ...s, external: !s.user_id, ...acc, prev_rest: prev.taken || prev.planned || prev.carry ? prev.rest : null };
+  }).filter((r) => r.active || r.entries.length || r.sick);
+  res.json({ year, state, states: V.STATES, holidays: V.holidays(year, state), rows, admin: isAdm });
+});
+app.put('/api/vacation/state', auth, admin, (req, res) => {
+  if (!V.STATES[req.body?.state]) return bad(res, 'Unbekanntes Bundesland');
+  setSetting('holidays_state', req.body.state);
   res.json({ ok: true });
 });
 

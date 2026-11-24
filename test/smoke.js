@@ -676,6 +676,54 @@ const U = require('../lib/util');
     const kFeed = await (await fetch(base + new URL((await call('k', 'GET', '/api/me/ical')).https).pathname)).text();
     assert.ok(kFeed.includes('SUMMARY:Urlaub: Mallorca'));
 
+    // Urlaubskonto & Mitarbeiter ohne CRM-Zugang
+    {
+      const V = require('../lib/vacation');
+      assert.equal(V.easter(2027), '2027-03-28');
+      assert.equal(V.holidays(2027, 'NW')['2027-05-27'], 'Fronleichnam');
+      assert.equal(V.holidays(2027, 'NI')['2027-05-27'], undefined);
+      assert.equal(V.countDays({ start_date: '2027-05-03', end_date: '2027-05-09' }, '2027-01-01', '2027-12-31', '12345', V.holidays(2027, 'NW')), 4, 'Himmelfahrt + Wochenende zählen nicht');
+      assert.equal(V.countDays({ start_date: '2027-05-03', end_date: '2027-05-03', start_time: '08:00' }, '2027-01-01', '2027-12-31'), 0.5);
+      await assert.rejects(call('k', 'POST', '/api/staff', { name: 'Hack' }), /403/);
+      const hans = await call('a', 'POST', '/api/staff', { name: 'Hans Helfer', vacation_days: 28 });
+      await assert.rejects(call('a', 'POST', '/api/staff', { name: 'hans helfer' }), /gibt es schon/);
+      const ha = (await call('a', 'POST', '/api/absences', { who: 's' + hans.id, kind: 'urlaub', start_date: '2027-05-03', end_date: '2027-05-09', note: 'Ostsee' })).id;
+      await call('a', 'POST', '/api/absences', { who: 's' + hans.id, kind: 'krank', start_date: '2027-02-01', end_date: '2027-02-02' });
+      const kOwn = (await call('k', 'POST', '/api/absences', { who: 's' + hans.id, kind: 'urlaub', start_date: '2027-08-02', end_date: '2027-08-03' })).id;
+      const cal = await call('k', 'GET', '/api/calendar?from=2027-05-01&to=2027-05-31&scope=all');
+      const hAbs = cal.absences.find((x) => x.id === ha);
+      assert.equal(hAbs.user_name, 'Hans Helfer'); assert.equal(hAbs.user_id, null); assert.equal(hAbs.note, '');
+      assert.equal(cal.holidays['2027-05-06'], 'Christi Himmelfahrt');
+      await assert.rejects(call('k', 'PUT', `/api/absences/${ha}`, { note: 'x' }), /403/);
+      await assert.rejects(call('k', 'DELETE', `/api/absences/${ha}`), /403/);
+      await call('a', 'PUT', `/api/absences/${ha}`, { kind: 'urlaub', start_date: '2027-05-03', end_date: '2027-05-10', note: 'Ostsee' });
+      assert.equal((await call('a', 'GET', '/api/absences?from=2027-05-01&to=2027-05-31')).find((x) => x.id === ha).staff_id, hans.id, 'bleibt beim Mitarbeiter');
+      await call('a', 'PUT', `/api/staff/${hans.id}`, { year: 2027, carry: '3,5', vacation_days: 28 });
+      let vac = await call('a', 'GET', '/api/vacation?year=2027');
+      let row = vac.rows.find((r) => r.id === hans.id);
+      assert.equal(row.external, true); assert.equal(row.entitlement, 31.5); assert.equal(row.planned + row.taken, 5); assert.equal(row.rest, 26.5); assert.equal(row.sick, 2);
+      const kRow = vac.rows.find((r) => r.user_id === kollege.id);
+      assert.equal(kRow.vacation_days, 30); assert.equal(kRow.planned + kRow.taken, 2, 'Kollege trägt nur für sich selbst ein');
+      const kv = await call('k', 'GET', '/api/vacation?year=2027');
+      assert.equal(kv.rows.length, 1); assert.equal(kv.rows[0].user_id, kollege.id);
+      await assert.rejects(call('k', 'PUT', '/api/vacation/state', { state: 'BY' }), /403/);
+      await call('a', 'PUT', '/api/vacation/state', { state: 'BY' });
+      assert.equal((await call('a', 'GET', '/api/vacation?year=2027')).holidays['2027-01-06'], 'Heilige Drei Könige');
+      await call('a', 'PUT', '/api/vacation/state', { state: 'NW' });
+      // später kommen + früher gehen am selben Tag = zusammen ein halber Urlaubstag
+      const late = (await call('a', 'POST', '/api/absences', { who: 's' + hans.id, kind: 'urlaub', start_date: '2027-06-01', start_time: '00:00', end_time: '10:00' })).id;
+      await call('a', 'POST', '/api/absences', { who: 's' + hans.id, kind: 'urlaub', start_date: '2027-06-01', start_time: '15:30', end_time: '23:59' });
+      row = (await call('a', 'GET', '/api/vacation?year=2027')).rows.find((r) => r.id === hans.id);
+      assert.equal(row.planned + row.taken, 5.5);
+      assert.equal((await call('a', 'GET', '/api/absences?from=2027-06-01&to=2027-06-01')).find((x) => x.id === late).end_time, '10:00');
+      await call('a', 'PUT', `/api/staff/${hans.id}`, { active: 0 });
+      assert.equal((await call('a', 'GET', '/api/staff')).find((s) => s.id === hans.id).active, 0);
+      await call('a', 'DELETE', `/api/staff/${hans.id}`);
+      assert.equal((await call('a', 'GET', '/api/absences?from=2027-01-01&to=2027-12-31')).filter((x) => x.user_name === 'Hans Helfer').length, 0, 'Abwesenheiten werden mitgelöscht');
+      await assert.rejects(call('a', 'DELETE', `/api/staff/${kRow.id}`), /Benutzer/);
+      await call('k', 'DELETE', `/api/absences/${kOwn}`);
+    }
+
     // Wiederholungen
     {
       const S = require('../lib/series');
